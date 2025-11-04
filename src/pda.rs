@@ -46,9 +46,17 @@ impl From<BTreeSet<NFAState>> for DFAState {
 
 #[derive(Clone, Debug)]
 pub struct DFA {
+    start: DFAState,
     transitions: HashMap<DFAState, HashMap<Symbol, DFAState>>,
     final_states: HashSet<DFAState>,
     state_ids_map: HashMap<DFAState, usize>,
+}
+
+pub struct Conflict {
+    // item for shift
+    shift: Item,
+    // rule number
+    reduce: usize,
 }
 
 impl DFA {
@@ -168,7 +176,7 @@ impl DFA {
         let _ = get_or_new_state_id(&start);
 
         let mut visited = HashSet::new();
-        let mut worklist = VecDeque::from([start]);
+        let mut worklist = VecDeque::from([start.clone()]);
         while !worklist.is_empty() {
             let cur = worklist.pop_front().unwrap();
             let cur_state_id = get_or_new_state_id(&cur);
@@ -225,7 +233,84 @@ impl DFA {
             }
         }
 
+        // mark all inadequate states
+        let inadequate_states: HashMap<DFAState, (Item, usize)> = final_states
+            .iter()
+            .filter_map(|state| {
+                let reduce_rules: HashSet<usize> = state
+                    .0
+                    .iter()
+                    .filter_map(|nfa_state| {
+                        let Item { rule, idx } = nfa_state.0;
+                        if idx == grammar[rule].right.len() {
+                            Some(rule)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let shift_rules: HashSet<Item> = state
+                    .0
+                    .iter()
+                    .filter_map(|nfa_state| {
+                        let Item { rule, idx } = nfa_state.0;
+                        if idx < grammar[rule].right.len() {
+                            let next_sym = &grammar[rule].right[idx];
+                            if matches!(next_sym, Symbol::Term(_)) {
+                                Some(nfa_state.0)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<HashSet<_>>();
+                if reduce_rules.len() > 1 {
+                    panic!("Reduce-reduce conflict detected at state {:?}!", state);
+                } else if shift_rules.len() > 1 {
+                    panic!("Shift-shift conflict detected at state {:?}!", state);
+                } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
+                    Some((
+                        state.clone(),
+                        (
+                            shift_rules.iter().next().unwrap().clone(),
+                            *reduce_rules.iter().next().unwrap(),
+                        ),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<_, _>>();
+
+        for (state, &(shift, reduce)) in &inadequate_states {
+            println!(
+                "Inadequate DFA State #{}:",
+                state_ids_map.get(state).unwrap()
+            );
+            for nfa_state in &state.0 {
+                println!("    {:?}", PrintableNFAState(nfa_state, grammar));
+            }
+            println!(
+                "    Shift on {:?}",
+                PrintableNFAState(&NFAState(shift), grammar)
+            );
+            let rule = &grammar.rules[reduce];
+            print!("    Reduce by {} -> ", rule.left.0);
+            for sym in &rule.right {
+                match sym {
+                    Symbol::Term(t) => print!("'{}' ", t.0),
+                    Symbol::NonTerm(nt) => print!("{} ", nt.0),
+                    Symbol::Epsilon => print!("ε "),
+                }
+            }
+            println!();
+        }
+
+        // let first_follow = grammar.first_follow_set();
         DFA {
+            start,
             transitions: dfa_transitions,
             final_states,
             state_ids_map,
@@ -326,53 +411,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn t1() {
-        let s_prime = NonTerminal::from("S'");
-        let s = NonTerminal::from("S");
-        let a = NonTerminal::from("A");
-        let b = NonTerminal::from("B");
-        let c = NonTerminal::from("C");
+    fn test_exercise() {
+        // grammar:
+        //      S' -> S
+        //      S -> A B | A
+        //      A -> a C c
+        //      C -> b b C | b
+        //      B -> c d
 
-        let grammar = Grammar {
-            start_sym: s_prime.clone(),
-            rules: vec![
-                // S->A
-                Rule {
-                    left: s_prime.clone(),
-                    right: vec![s.clone().into()],
-                },
-                // S -> A B
-                Rule {
-                    left: s.clone(),
-                    right: vec![a.clone().into(), b.clone().into()],
-                },
-                // S->A
-                Rule {
-                    left: s.clone(),
-                    right: vec![a.clone().into()],
-                },
-                // A -> a C c
-                Rule {
-                    left: a.clone(),
-                    right: vec![Terminal('a').into(), c.clone().into(), Terminal('c').into()],
-                },
-                // C -> b b C
-                Rule {
-                    left: c.clone(),
-                    right: vec![Terminal('b').into(), Terminal('b').into(), c.clone().into()],
-                },
-                // C -> b
-                Rule {
-                    left: c.clone(),
-                    right: vec![Terminal('b').into()],
-                },
-                // B -> c d
-                Rule {
-                    left: b.clone(),
-                    right: vec![Terminal('c').into(), Terminal('d').into()],
-                },
+        let grammar = Grammar::parse(
+            "S\'",
+            vec![
+                "S' -> S",
+                "S -> A B",
+                "S -> A",
+                "A -> a C c",
+                "C -> b b C",
+                "C -> b",
+                "B -> c d",
             ],
-        };
+        );
 
         let _ = DFA::build(&grammar);
     }
