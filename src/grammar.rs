@@ -5,6 +5,8 @@ use std::{
     ops::Index,
 };
 
+use tracing::debug;
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct NonTerminal(pub(crate) String);
 
@@ -34,6 +36,16 @@ pub enum Symbol {
     Term(Terminal),
     NonTerm(NonTerminal),
     Epsilon,
+}
+
+impl Symbol {
+    pub fn into_term(self) -> Terminal {
+        if let Self::Term(term) = self {
+            term
+        } else {
+            panic!()
+        }
+    }
 }
 
 impl From<NonTerminal> for Symbol {
@@ -120,6 +132,16 @@ impl Grammar {
 pub struct FirstFollow {
     first: HashMap<Symbol, HashSet<Terminal>>,
     follow: HashMap<Symbol, HashSet<Terminal>>,
+}
+
+impl FirstFollow {
+    pub fn first(&self) -> &HashMap<Symbol, HashSet<Terminal>> {
+        &self.first
+    }
+
+    pub fn follow(&self) -> &HashMap<Symbol, HashSet<Terminal>> {
+        &self.follow
+    }
 }
 
 #[cfg(test)]
@@ -288,26 +310,22 @@ impl Grammar {
 
         let mut deps: HashMap<Symbol, HashSet<Symbol>> = HashMap::new();
         for rule in &self.rules {
-            for (pos, sym) in rule.right.iter().enumerate() {
-                let entry = deps.entry(sym.clone()).or_default();
+            let sym: Symbol = rule.left.clone().into();
+            // let entry = deps.entry(sym).or_default();
 
-                // add dependencies
-                let mut next_pos = pos + 1;
-                while next_pos < rule.right.len() {
-                    let next_sym = &rule.right[next_pos];
-                    entry.insert(next_sym.clone());
+            // add dependencies
+            let mut next_pos = 0;
+            while next_pos < rule.right.len() {
+                let next_sym = rule.right[next_pos].clone();
 
-                    if let Symbol::NonTerm(nonterm) = next_sym
-                        && could_be_empty.contains(nonterm)
-                    {
-                        next_pos += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if next_pos == rule.right.len() {
-                    entry.insert(rule.left.clone().into());
+                if let Symbol::NonTerm(nonterm) = &next_sym
+                    && could_be_empty.contains(nonterm)
+                {
+                    deps.entry(next_sym).or_default().insert(sym.clone());
+                    next_pos += 1;
+                } else {
+                    deps.entry(next_sym).or_default().insert(sym.clone());
+                    break;
                 }
             }
         }
@@ -316,12 +334,12 @@ impl Grammar {
         #[cfg(debug_assertions)]
         {
             for (sym, dep_set) in &deps {
-                println!("Deps for {:?}:", sym);
+                tracing::trace!("Deps for {:?}:", sym);
                 for dep in dep_set {
-                    println!("  {:?}", dep);
+                    tracing::trace!("  {:?}", dep);
                 }
             }
-            println!();
+            tracing::trace!("");
         }
 
         let nonterm_to_rules = self.rules.iter().enumerate().fold(
@@ -334,6 +352,7 @@ impl Grammar {
 
         // now we are cooking, using worklist algorithm to iterate to a fixed point
 
+        debug!("calculating first set");
         let mut first_set: HashMap<Symbol, HashSet<Terminal>> = HashMap::new();
 
         let mut worklist = VecDeque::from(all_syms.into_iter().collect::<Vec<_>>());
@@ -387,18 +406,21 @@ impl Grammar {
             }
         }
 
+        debug!("calculating follow set");
+
         let mut follow_set: HashMap<Symbol, HashSet<Terminal>> = HashMap::new();
-        for rule in &self.rules {
+        for rule in self.rules.iter().filter(|rule| !rule.right.is_empty()) {
             for idx in 0..(rule.right.len() - 1) {
-                if matches!(&rule.right[idx], Symbol::Term(_)) {
-                    let mut all_follower_syms = vec![idx + 1];
-                    let mut follower_sym_idx = idx + 2;
+                if matches!(&rule.right[idx], Symbol::NonTerm(_)) {
+                    let mut all_follower_syms = vec![];
+                    let mut follower_sym_idx = idx + 1;
                     while follower_sym_idx < rule.right.len() {
+                        all_follower_syms.push(follower_sym_idx);
+
                         let sym = &rule.right[follower_sym_idx];
                         if let Symbol::NonTerm(nt) = sym
                             && could_be_empty.contains(nt)
                         {
-                            all_follower_syms.push(follower_sym_idx);
                             follower_sym_idx += 1;
                         } else {
                             break;
@@ -418,6 +440,8 @@ impl Grammar {
                 }
             }
         }
+
+        dbg!(&follow_set);
 
         FirstFollow {
             first: first_set,
@@ -584,5 +608,43 @@ mod tests {
             }
         }
         assert!(first_set.assert_eq(CompareOption::First, &expect));
+    }
+
+    #[test]
+    fn test_follower() {
+        let grammar = Grammar::parse(
+            "S\'",
+            vec![
+                "S' -> S $",
+                "S -> A B",
+                "S -> A",
+                "A -> a C c",
+                "C -> b b C",
+                "C -> b",
+                "B -> c d",
+            ],
+        );
+
+        let first_follow = grammar.calculate_first_follow_set();
+        assert!(first_follow.assert_eq(
+            CompareOption::Follow,
+            &FirstFollow::new_for_test(
+                vec![],
+                vec![
+                    (
+                        Symbol::NonTerm(NonTerminal::new("S")),
+                        vec![Terminal::new("$")],
+                    ),
+                    (
+                        Symbol::NonTerm(NonTerminal::new("A")),
+                        vec![Terminal::new("c")],
+                    ),
+                    (
+                        Symbol::NonTerm(NonTerminal::new("C")),
+                        vec![Terminal::new("c")],
+                    ),
+                ],
+            ),
+        ));
     }
 }

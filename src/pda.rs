@@ -226,9 +226,9 @@ impl DFA {
 
             let print_order = BTreeMap::from_iter(state_ids_map.iter().map(|(k, v)| (*v, k)));
             for (id, state) in print_order {
-                println!("DFA State #{}:", id);
+                tracing::trace!("DFA State #{}:", id);
                 for nfa_state in &state.0 {
-                    println!("    {:?}", PrintableNFAState(nfa_state, grammar));
+                    tracing::trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
                 }
             }
         }
@@ -305,6 +305,20 @@ impl DFA {
                     Symbol::Epsilon => print!("ε "),
                 }
             }
+            let follow = grammar.first_follow_set().follow();
+            let empty_set = HashSet::new();
+            let followers = follow
+                .get(&(rule.left.clone().into()))
+                .unwrap_or(&empty_set);
+            let shift_sym = grammar.rules[shift.rule].right[shift.idx]
+                .clone()
+                .into_term();
+            println!(
+                "follower set: {:?}, shift_sym: {:?}, resolved: {}",
+                followers,
+                shift_sym,
+                !followers.contains(&shift_sym)
+            );
             println!();
         }
 
@@ -431,6 +445,8 @@ mod tests {
                 "B -> c d",
             ],
         );
+
+        // let _ = grammar.first_follow_set();
 
         let _ = DFA::build(&grammar);
     }
