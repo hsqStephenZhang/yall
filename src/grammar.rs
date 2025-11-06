@@ -66,8 +66,27 @@ pub struct Rule {
     pub right: Vec<Symbol>,
 }
 
+impl std::fmt::Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} -> ", self.left.0)?;
+        if self.right.is_empty() {
+            write!(f, "ε")
+        } else {
+            for sym in &self.right {
+                match sym {
+                    Symbol::Term(t) => write!(f, "'{}' ", t.0)?,
+                    Symbol::NonTerm(nt) => write!(f, "{} ", nt.0)?,
+                    Symbol::Epsilon => write!(f, "ε ")?,
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Grammar {
+    pub pseudo_start_sym: NonTerminal,
     pub start_sym: NonTerminal,
     pub rules: Vec<Rule>,
 
@@ -76,11 +95,14 @@ pub struct Grammar {
 }
 
 impl Grammar {
-    pub fn parse<S>(start_sym: &str, rules: Vec<S>) -> Self
+    pub fn parse<S>(start_sym: &str, raw_rules: Vec<S>) -> Self
     where
         S: AsRef<str>,
     {
-        let nonterms = rules
+        let start_sym = NonTerminal::new(start_sym);
+        let pseudo_start_sym = NonTerminal::new("S'");
+
+        let nonterms = raw_rules
             .iter()
             .map(|s| {
                 let line = s.as_ref();
@@ -89,39 +111,42 @@ impl Grammar {
             })
             .collect::<HashSet<_>>();
 
-        let rules = rules
-            .iter()
-            .map(|line| {
-                let line = line.as_ref();
-                let mut parts = line.split("->");
-                let left = parts.next().unwrap().trim();
-                let right = parts.next().unwrap().trim();
+        let mut rules = vec![Rule {
+            left: pseudo_start_sym.clone(),
+            right: vec![start_sym.clone().into()],
+        }];
 
-                let left_nt = NonTerminal::new(left);
-                let right_syms = if right == "ε" {
-                    vec![]
-                } else {
-                    right
-                        .split_whitespace()
-                        .map(|s| {
-                            if nonterms.contains(s) {
-                                Symbol::NonTerm(NonTerminal::new(s))
-                            } else {
-                                Symbol::Term(Terminal::new(s))
-                            }
-                        })
-                        .collect()
-                };
+        rules.extend(raw_rules.iter().map(|line| {
+            let line = line.as_ref();
+            let mut parts = line.split("->");
+            let left = parts.next().unwrap().trim();
+            let right = parts.next().unwrap().trim();
 
-                Rule {
-                    left: left_nt,
-                    right: right_syms,
-                }
-            })
-            .collect();
+            let left_nt = NonTerminal::new(left);
+            let right_syms = if right == "ε" {
+                vec![]
+            } else {
+                right
+                    .split_whitespace()
+                    .map(|s| {
+                        if nonterms.contains(s) {
+                            Symbol::NonTerm(NonTerminal::new(s))
+                        } else {
+                            Symbol::Term(Terminal::new(s))
+                        }
+                    })
+                    .collect()
+            };
+
+            Rule {
+                left: left_nt,
+                right: right_syms,
+            }
+        }));
 
         Self {
-            start_sym: NonTerminal::new(start_sym),
+            pseudo_start_sym,
+            start_sym,
             rules,
             first_and_follow: OnceCell::new(),
         }
@@ -440,8 +465,6 @@ impl Grammar {
                 }
             }
         }
-
-        dbg!(&follow_set);
 
         FirstFollow {
             first: first_set,

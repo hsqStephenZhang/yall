@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
+use tracing::trace;
+
 use crate::grammar::*;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,6 +40,17 @@ impl From<Item> for NFAState {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DFAState(BTreeSet<NFAState>);
 
+pub struct PrintableDFAState<'a>(&'a DFAState, &'a Grammar);
+
+impl std::fmt::Debug for PrintableDFAState<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for nfa_state in &self.0.0 {
+            writeln!(f, "{:?}", PrintableNFAState(nfa_state, self.1))?;
+        }
+        Ok(())
+    }
+}
+
 impl From<BTreeSet<NFAState>> for DFAState {
     fn from(value: BTreeSet<NFAState>) -> Self {
         Self(value)
@@ -47,8 +60,11 @@ impl From<BTreeSet<NFAState>> for DFAState {
 #[derive(Clone, Debug)]
 pub struct DFA {
     start: DFAState,
+    end: DFAState,
     transitions: HashMap<DFAState, HashMap<Symbol, DFAState>>,
     final_states: HashSet<DFAState>,
+    // from inadequate state to follow set of the reduce rule
+    conflict_resolver: HashMap<DFAState, HashSet<Terminal>>,
     state_ids_map: HashMap<DFAState, usize>,
 }
 
@@ -174,6 +190,8 @@ impl DFA {
 
         let start = DFAState::from(get_closure(Item::new(0, 0).into()));
         let _ = get_or_new_state_id(&start);
+        let end = DFAState::from(get_closure(Item::new(0, 1).into()));
+        let _ = get_or_new_state_id(&end);
 
         let mut visited = HashSet::new();
         let mut worklist = VecDeque::from([start.clone()]);
@@ -227,9 +245,7 @@ impl DFA {
             let print_order = BTreeMap::from_iter(state_ids_map.iter().map(|(k, v)| (*v, k)));
             for (id, state) in print_order {
                 tracing::trace!("DFA State #{}:", id);
-                for nfa_state in &state.0 {
-                    tracing::trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
-                }
+                tracing::trace!("{:?}", PrintableDFAState(state, grammar));
             }
         }
 
@@ -284,51 +300,102 @@ impl DFA {
             })
             .collect::<HashMap<_, _>>();
 
-        for (state, &(shift, reduce)) in &inadequate_states {
-            println!(
-                "Inadequate DFA State #{}:",
-                state_ids_map.get(state).unwrap()
-            );
-            for nfa_state in &state.0 {
-                println!("    {:?}", PrintableNFAState(nfa_state, grammar));
-            }
-            println!(
-                "    Shift on {:?}",
-                PrintableNFAState(&NFAState(shift), grammar)
-            );
-            let rule = &grammar.rules[reduce];
-            print!("    Reduce by {} -> ", rule.left.0);
-            for sym in &rule.right {
-                match sym {
-                    Symbol::Term(t) => print!("'{}' ", t.0),
-                    Symbol::NonTerm(nt) => print!("{} ", nt.0),
-                    Symbol::Epsilon => print!("ε "),
+        #[cfg(debug_assertions)]
+        {
+            use tracing::trace;
+            for (state, &(shift, reduce)) in &inadequate_states {
+                trace!(
+                    "Inadequate DFA State #{}:",
+                    state_ids_map.get(state).unwrap()
+                );
+                for nfa_state in &state.0 {
+                    trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
                 }
+                trace!(
+                    "    Shift on {:?}",
+                    PrintableNFAState(&NFAState(shift), grammar)
+                );
+                let rule = &grammar.rules[reduce];
+                trace!("    Reduce by: {}", rule);
+                let follow = grammar.first_follow_set().follow();
+                let empty_set = HashSet::new();
+                let followers = follow
+                    .get(&(rule.left.clone().into()))
+                    .unwrap_or(&empty_set);
+                let shift_sym = grammar.rules[shift.rule].right[shift.idx]
+                    .clone()
+                    .into_term();
+                trace!(
+                    "follower set: {:?}, shift_sym: {:?}, resolved: {}",
+                    followers,
+                    shift_sym,
+                    !followers.contains(&shift_sym)
+                );
+                println!();
             }
-            let follow = grammar.first_follow_set().follow();
-            let empty_set = HashSet::new();
-            let followers = follow
-                .get(&(rule.left.clone().into()))
-                .unwrap_or(&empty_set);
-            let shift_sym = grammar.rules[shift.rule].right[shift.idx]
-                .clone()
-                .into_term();
-            println!(
-                "follower set: {:?}, shift_sym: {:?}, resolved: {}",
-                followers,
-                shift_sym,
-                !followers.contains(&shift_sym)
-            );
-            println!();
         }
+
+        // now we know that lookahead could resolve the conflicts
+        // copy the follow set to DFA
+        let conflict_resolver = inadequate_states
+            .into_iter()
+            .map(|(state, (_shift, reduce))| {
+                let rule = &grammar.rules[reduce];
+                let first_follow = grammar.first_follow_set();
+                let empty_set = HashSet::new();
+                let followers = first_follow
+                    .follow()
+                    .get(&(rule.left.clone().into()))
+                    .unwrap_or(&empty_set);
+                (state, followers.clone())
+            })
+            .collect();
 
         // let first_follow = grammar.first_follow_set();
         DFA {
             start,
+            end,
             transitions: dfa_transitions,
             final_states,
+            conflict_resolver,
             state_ids_map,
         }
+    }
+}
+
+pub struct TokenStream {
+    tokens: Vec<Terminal>,
+    position: usize,
+}
+
+impl TokenStream {
+    pub fn new(tokens: Vec<Terminal>) -> Self {
+        Self {
+            tokens,
+            position: 0,
+        }
+    }
+
+    pub fn next(&mut self) -> Option<&Terminal> {
+        if self.position < self.tokens.len() {
+            let tk = &self.tokens[self.position];
+            self.position += 1;
+            Some(tk)
+        } else {
+            None
+        }
+    }
+
+    pub fn peek(&self) -> Option<&Terminal> {
+        if self.position < self.tokens.len() {
+            Some(&self.tokens[self.position])
+        } else {
+            None
+        }
+    }
+
+    pub fn is_eof(&self) -> bool {
+        self.position >= self.tokens.len()
     }
 }
 
@@ -340,13 +407,25 @@ pub struct PDA {
 }
 
 impl PDA {
-    pub fn process(&mut self, token_stream: Vec<Terminal>) {
-        for tk in token_stream {
-            self.process_one(tk);
+    pub fn process(&mut self, mut token_stream: TokenStream) -> bool {
+        while !token_stream.is_eof() {
+            let tk = token_stream.next().unwrap().clone();
+            if !self.process_one(tk, &token_stream) {
+                break;
+            }
         }
+        for (idx, state) in self.stack.iter().enumerate() {
+            println!(
+                "Stack state #{}: {:?}",
+                idx,
+                PrintableDFAState(state, &self.grammar)
+            );
+        }
+
+        return token_stream.is_eof() && self.stack.len() == 2 && self.stack[0] == self.dfa.start;
     }
 
-    pub fn process_one(&mut self, tk: Terminal) {
+    pub fn process_one(&mut self, tk: Terminal, token_stream: &TokenStream) -> bool {
         assert!(!self.stack.is_empty());
 
         // first try to shift
@@ -381,7 +460,14 @@ impl PDA {
                 assert!(possible_rules.len() == 1, "Ambiguous reduce actions!");
                 possible_rules[0]
             };
+
             let rule = &self.grammar[rule_to_apply];
+            trace!("Reducing by rule: {}", rule);
+            if rule_to_apply == 0 && self.stack.last().unwrap() == &self.dfa.end {
+                trace!("Parse done!");
+                return false;
+            }
+
             let to_pop = rule
                 .right
                 .iter()
@@ -396,9 +482,14 @@ impl PDA {
             let top_state = self.stack.last().unwrap();
             let goto_state = self.dfa.transitions[top_state]
                 .get(&Symbol::NonTerm(rule.left.clone()))
-                .expect("No goto state found!");
+                .expect(&format!(
+                    "No goto state found! state:\n{:?}, symbol: {}",
+                    PrintableDFAState(top_state, &self.grammar),
+                    rule.left.0.clone(),
+                ));
             self.stack.push(goto_state.clone());
         }
+        true
     }
 }
 
@@ -421,11 +512,21 @@ impl PDABuilder {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+
+    static INIT: std::sync::Once = std::sync::Once::new();
+    fn setup() {
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_test_writer()
+                .try_init();
+        });
+    }
 
     #[test]
     fn test_exercise() {
+        setup();
         // grammar:
         //      S' -> S
         //      S -> A B | A
@@ -434,9 +535,8 @@ mod tests {
         //      B -> c d
 
         let grammar = Grammar::parse(
-            "S\'",
+            "S",
             vec![
-                "S' -> S",
                 "S -> A B",
                 "S -> A",
                 "A -> a C c",
@@ -446,8 +546,20 @@ mod tests {
             ],
         );
 
-        // let _ = grammar.first_follow_set();
+        let dfa = DFA::build(&grammar);
+        let mut pda = PDA {
+            stack: vec![dfa.start.clone()],
+            dfa,
+            grammar,
+        };
 
-        let _ = DFA::build(&grammar);
+        let ts = TokenStream::new(vec![
+            Terminal("a".into()),
+            Terminal("b".into()),
+            Terminal("c".into()),
+        ]);
+
+        let res = pda.process(ts);
+        println!("Result: {}", res);
     }
 }
