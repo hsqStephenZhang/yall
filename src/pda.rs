@@ -442,6 +442,7 @@ impl PDA {
             if !self.dfa.final_states.contains(current_state) {
                 break;
             }
+
             // in final state, need to reduce
             let rule_to_apply = {
                 // find which rule to apply
@@ -460,6 +461,21 @@ impl PDA {
                 assert!(possible_rules.len() == 1, "Ambiguous reduce actions!");
                 possible_rules[0]
             };
+
+            // resolve conflict by looking ahead
+            if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state) {
+                if let Some(next_tk) = token_stream.peek() {
+                    // not in the follow set, should not reduce
+                    if !follow_set.contains(next_tk) {
+                        break;
+                    } else {
+                        trace!(
+                            "Lookahead token '{:?}' is in follow set, reducing by rule {}",
+                            next_tk, rule_to_apply
+                        );
+                    }
+                }
+            }
 
             let rule = &self.grammar[rule_to_apply];
             trace!("Reducing by rule: {}", rule);
@@ -547,19 +563,35 @@ mod tests {
         );
 
         let dfa = DFA::build(&grammar);
-        let mut pda = PDA {
+        let pda = PDA {
             stack: vec![dfa.start.clone()],
             dfa,
             grammar,
         };
 
+        // let ts = TokenStream::new(vec![
+        //     Terminal("a".into()),
+        //     Terminal("b".into()),
+        //     Terminal("c".into()),
+        // ]);
+
+        // let res = pda.clone().process(ts);
+        // println!("Result: {}", res);
+
+        // a b b b b b c c d
         let ts = TokenStream::new(vec![
             Terminal("a".into()),
             Terminal("b".into()),
+            Terminal("b".into()),
+            Terminal("b".into()),
+            Terminal("b".into()),
+            Terminal("b".into()),
             Terminal("c".into()),
+            Terminal("c".into()),
+            Terminal("d".into()),
         ]);
 
-        let res = pda.process(ts);
+        let res = pda.clone().process(ts);
         println!("Result: {}", res);
     }
 }
