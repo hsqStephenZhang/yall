@@ -65,14 +65,13 @@ pub struct DFA {
     final_states: HashSet<DFAState>,
     // from inadequate state to follow set of the reduce rule
     conflict_resolver: HashMap<DFAState, HashSet<Terminal>>,
-    state_ids_map: HashMap<DFAState, usize>,
 }
 
 pub struct Conflict {
     // item for shift
-    shift: Item,
+    pub shift: Item,
     // rule number
-    reduce: usize,
+    pub reduce: usize,
 }
 
 impl DFA {
@@ -190,8 +189,6 @@ impl DFA {
 
         let start = DFAState::from(get_closure(Item::new(0, 0).into()));
         let _ = get_or_new_state_id(&start);
-        let end = DFAState::from(get_closure(Item::new(0, 1).into()));
-        let _ = get_or_new_state_id(&end);
 
         let mut visited = HashSet::new();
         let mut worklist = VecDeque::from([start.clone()]);
@@ -351,6 +348,11 @@ impl DFA {
             })
             .collect();
 
+        let end = dfa_transitions[&start]
+            .get(&Symbol::NonTerm(grammar.start_sym.clone()))
+            .unwrap()
+            .clone();
+
         // let first_follow = grammar.first_follow_set();
         DFA {
             start,
@@ -358,7 +360,6 @@ impl DFA {
             transitions: dfa_transitions,
             final_states,
             conflict_resolver,
-            state_ids_map,
         }
     }
 }
@@ -479,7 +480,10 @@ impl PDA {
 
             let rule = &self.grammar[rule_to_apply];
             trace!("Reducing by rule: {}", rule);
-            if rule_to_apply == 0 && self.stack.last().unwrap() == &self.dfa.end {
+            if rule_to_apply == 0
+                && token_stream.peek().is_none()
+                && self.stack.last().unwrap() == &self.dfa.end
+            {
                 trace!("Parse done!");
                 return false;
             }
@@ -506,23 +510,6 @@ impl PDA {
             self.stack.push(goto_state.clone());
         }
         true
-    }
-}
-
-pub struct PDABuilder {
-    grammar: Grammar,
-}
-
-impl PDABuilder {
-    pub fn build() -> PDA {
-        // 1. from the grammar to characteristic NDFA
-        // 2. from characteristic NDFA to DFA
-
-        // 3. mark all inadequate states, add look ahead(conflict resolving) for at these states
-
-        // 4. build the PDA with the DFA
-
-        todo!()
     }
 }
 
@@ -591,6 +578,39 @@ mod tests {
             Terminal("d".into()),
         ]);
 
+        let res = pda.clone().process(ts);
+        println!("Result: {}", res);
+    }
+
+    #[test]
+    fn test_expr() {
+        setup();
+        let grammar = Grammar::parse(
+            "E",
+            vec![
+                "E -> E + T",
+                "E -> T",
+                "T -> T * F",
+                "T -> F",
+                "F -> ( E )",
+                "F -> id",
+            ],
+        );
+
+        let dfa = DFA::build(&grammar);
+        let pda = PDA {
+            stack: vec![dfa.start.clone()],
+            dfa,
+            grammar,
+        };
+
+        let ts = TokenStream::new(vec![
+            Terminal("id".into()),
+            Terminal("+".into()),
+            Terminal("id".into()),
+            Terminal("*".into()),
+            Terminal("id".into()),
+        ]);
         let res = pda.clone().process(ts);
         println!("Result: {}", res);
     }
