@@ -40,6 +40,9 @@ impl From<Item> for NFAState {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DFAState(BTreeSet<NFAState>);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DfaStateId(usize);
+
 pub struct PrintableDFAState<'a>(&'a DFAState, &'a Grammar);
 
 impl std::fmt::Debug for PrintableDFAState<'_> {
@@ -56,15 +59,17 @@ impl From<BTreeSet<NFAState>> for DFAState {
         Self(value)
     }
 }
-
+#[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct DFA {
-    start: DFAState,
-    end: DFAState,
-    transitions: HashMap<DFAState, HashMap<Symbol, DFAState>>,
-    final_states: HashSet<DFAState>,
+    start: DfaStateId,
+    end: DfaStateId,
+    transitions: HashMap<DfaStateId, HashMap<Symbol, DfaStateId>>,
+    final_states: HashSet<DfaStateId>,
     // from inadequate state to follow set of the reduce rule
-    conflict_resolver: HashMap<DFAState, HashSet<Terminal>>,
+    conflict_resolver: HashMap<DfaStateId, HashSet<Terminal>>,
+    state_to_id: HashMap<DFAState, DfaStateId>,
+    id_to_state: HashMap<DfaStateId, DFAState>,
 }
 
 pub struct Conflict {
@@ -172,30 +177,32 @@ impl DFA {
         };
 
         let mut state_id_counter = 0;
-        let mut state_ids_map = HashMap::<DFAState, usize>::new();
+        let mut id_to_state = HashMap::<DfaStateId, DFAState>::new();
+        let mut state_to_id = HashMap::<DFAState, DfaStateId>::new();
         let mut get_or_new_state_id = |state: &DFAState| {
-            if let Some(id) = state_ids_map.get(state) {
+            if let Some(id) = state_to_id.get(state) {
                 *id
             } else {
-                let id = state_id_counter;
+                let id = DfaStateId(state_id_counter);
                 state_id_counter += 1;
-                state_ids_map.insert(state.clone(), id);
+                state_to_id.insert(state.clone(), id);
+                id_to_state.insert(id, state.clone());
                 id
             }
         };
 
-        let mut dfa_transitions: HashMap<DFAState, HashMap<Symbol, DFAState>> = HashMap::new();
+        let mut dfa_transitions: HashMap<DfaStateId, HashMap<Symbol, DfaStateId>> = HashMap::new();
         let mut final_states = HashSet::new();
 
-        let start = DFAState::from(get_closure(Item::new(0, 0).into()));
-        let _ = get_or_new_state_id(&start);
+        let start_state = DFAState::from(get_closure(Item::new(0, 0).into()));
+        let start = get_or_new_state_id(&start_state);
 
         let mut visited = HashSet::new();
-        let mut worklist = VecDeque::from([start.clone()]);
+        let mut worklist = VecDeque::from([start_state.clone()]);
         while !worklist.is_empty() {
             let cur = worklist.pop_front().unwrap();
-            let cur_state_id = get_or_new_state_id(&cur);
-            if !visited.insert(cur_state_id) {
+            let cur_id = get_or_new_state_id(&cur);
+            if !visited.insert(cur_id) {
                 continue;
             }
             // mark as final state
@@ -203,7 +210,7 @@ impl DFA {
                 let Item { rule, idx } = nfa_state.0;
                 idx == grammar[rule].right.len()
             }) {
-                final_states.insert(cur.clone());
+                final_states.insert(cur_id);
             }
 
             let mut all_actions = HashSet::new();
@@ -226,10 +233,12 @@ impl DFA {
                     }
                 }
 
+                let next_id = get_or_new_state_id(&DFAState(next_dfa_state.clone()));
+
                 dfa_transitions
-                    .entry(cur.clone())
+                    .entry(cur_id)
                     .or_default()
-                    .insert(action, next_dfa_state.clone().into());
+                    .insert(action, next_id);
 
                 worklist.push_back(next_dfa_state.into());
             }
@@ -239,17 +248,18 @@ impl DFA {
         {
             use std::collections::BTreeMap;
 
-            let print_order = BTreeMap::from_iter(state_ids_map.iter().map(|(k, v)| (*v, k)));
+            let print_order = BTreeMap::from_iter(state_to_id.iter().map(|(k, v)| (*v, k)));
             for (id, state) in print_order {
-                tracing::trace!("DFA State #{}:", id);
+                tracing::trace!("DFA State #{:?}:", id);
                 tracing::trace!("{:?}", PrintableDFAState(state, grammar));
             }
         }
 
         // mark all inadequate states
-        let inadequate_states: HashMap<DFAState, (Item, usize)> = final_states
+        let inadequate_states: HashMap<DfaStateId, (Item, usize)> = final_states
             .iter()
-            .filter_map(|state| {
+            .filter_map(|state_id| {
+                let state = &id_to_state[state_id];
                 let reduce_rules: HashSet<usize> = state
                     .0
                     .iter()
@@ -285,7 +295,7 @@ impl DFA {
                     panic!("Shift-shift conflict detected at state {:?}!", state);
                 } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
                     Some((
-                        state.clone(),
+                        state_id.clone(),
                         (
                             shift_rules.iter().next().unwrap().clone(),
                             *reduce_rules.iter().next().unwrap(),
@@ -300,10 +310,11 @@ impl DFA {
         #[cfg(debug_assertions)]
         {
             use tracing::trace;
-            for (state, &(shift, reduce)) in &inadequate_states {
+            for (state_id, &(shift, reduce)) in &inadequate_states {
+                let state = &id_to_state[state_id];
                 trace!(
-                    "Inadequate DFA State #{}:",
-                    state_ids_map.get(state).unwrap()
+                    "Inadequate DFA State #{:?}:",
+                    state_to_id.get(state).unwrap()
                 );
                 for nfa_state in &state.0 {
                     trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
@@ -360,6 +371,8 @@ impl DFA {
             transitions: dfa_transitions,
             final_states,
             conflict_resolver,
+            state_to_id,
+            id_to_state,
         }
     }
 }
@@ -402,7 +415,7 @@ impl TokenStream {
 
 #[derive(Clone, Debug)]
 pub struct PDA {
-    stack: Vec<DFAState>,
+    stack: Vec<DfaStateId>,
     dfa: DFA,
     grammar: Grammar,
 }
@@ -419,7 +432,7 @@ impl PDA {
             println!(
                 "Stack state #{}: {:?}",
                 idx,
-                PrintableDFAState(state, &self.grammar)
+                PrintableDFAState(&self.dfa.id_to_state[state], &self.grammar)
             );
         }
 
@@ -439,10 +452,12 @@ impl PDA {
 
         // then try to reduce until it's unreduceable
         loop {
-            let current_state = self.stack.last().unwrap();
-            if !self.dfa.final_states.contains(current_state) {
+            let current_state_id = self.stack.last().unwrap();
+            if !self.dfa.final_states.contains(current_state_id) {
                 break;
             }
+
+            let current_state = &self.dfa.id_to_state[current_state_id];
 
             // in final state, need to reduce
             let rule_to_apply = {
@@ -464,7 +479,7 @@ impl PDA {
             };
 
             // resolve conflict by looking ahead
-            if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state) {
+            if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id) {
                 if let Some(next_tk) = token_stream.peek() {
                     // not in the follow set, should not reduce
                     if !follow_set.contains(next_tk) {
@@ -499,8 +514,9 @@ impl PDA {
             for _ in 0..to_pop {
                 self.stack.pop();
             }
-            let top_state = self.stack.last().unwrap();
-            let goto_state = self.dfa.transitions[top_state]
+            let top_state_id = self.stack.last().unwrap();
+            let top_state = &self.dfa.id_to_state[top_state_id];
+            let goto_state = self.dfa.transitions[top_state_id]
                 .get(&Symbol::NonTerm(rule.left.clone()))
                 .expect(&format!(
                     "No goto state found! state:\n{:?}, symbol: {}",
