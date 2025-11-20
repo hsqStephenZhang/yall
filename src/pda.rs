@@ -419,13 +419,33 @@ impl<Tk> TokenStream<Tk> {
 }
 
 #[derive(Clone)]
-pub struct PDA<Tk: Hash + Eq> {
+pub struct PDA<'a, Tk: Hash + Eq, Value> {
     stack: Vec<DfaStateId>,
+    value_stack: Vec<Value>,
     dfa: DFA<Tk>,
     grammar: Grammar<Tk>,
+    actions: &'a [fn(&mut Vec<Value>) -> Value],
 }
 
-impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
+impl<'a, Tk, Value> PDA<'a, Tk, Value>
+where
+    Tk: Clone + TerminalKind + Hash + Eq + Debug,
+    Value: From<Tk> + Debug,
+{
+    pub fn new(
+        dfa: DFA<Tk>,
+        grammar: Grammar<Tk>,
+        actions: &'a [fn(&mut Vec<Value>) -> Value],
+    ) -> Self {
+        Self {
+            stack: vec![dfa.start.clone()],
+            value_stack: vec![],
+            dfa,
+            grammar,
+            actions,
+        }
+    }
+
     pub fn process(&mut self, mut token_stream: TokenStream<Tk>) -> bool {
         while !token_stream.is_eof() {
             let tk = token_stream.next().unwrap().clone();
@@ -441,7 +461,10 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
             );
         }
 
-        return token_stream.is_eof() && self.stack.len() == 2 && self.stack[0] == self.dfa.start;
+        return token_stream.is_eof()
+            && self.stack.len() == 2
+            && self.stack[0] == self.dfa.start
+            && self.stack[1] == self.dfa.end;
     }
 
     pub fn process_one(&mut self, tk: Tk, token_stream: &TokenStream<Tk>) -> bool {
@@ -453,6 +476,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
         if let Some(next_state) = self.dfa.transitions[current_state].get(&Symbol::Term(tk.clone()))
         {
             self.stack.push(next_state.clone());
+            self.value_stack.push(tk.into());
         }
 
         // then try to reduce until it's unreduceable
@@ -519,6 +543,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
             for _ in 0..to_pop {
                 self.stack.pop();
             }
+            let action_fn = self.actions[rule_to_apply];
             let top_state_id = self.stack.last().unwrap();
             let top_state = &self.dfa.id_to_state[top_state_id];
             let goto_state = self.dfa.transitions[top_state_id]
@@ -529,6 +554,8 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
                     rule.left.0.clone(),
                 ));
             self.stack.push(goto_state.clone());
+            let result = action_fn(&mut self.value_stack);
+            self.value_stack.push(result);
         }
         true
     }
@@ -536,6 +563,137 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
 
 #[cfg(test)]
 mod tests {
+
+    #[derive(Clone)]
+    pub struct SimplyPDA<Tk: Hash + Eq> {
+        stack: Vec<DfaStateId>,
+        dfa: DFA<Tk>,
+        grammar: Grammar<Tk>,
+    }
+
+    impl<Tk> SimplyPDA<Tk>
+    where
+        Tk: Clone + TerminalKind + Hash + Eq + Debug,
+    {
+        pub fn new(dfa: DFA<Tk>, grammar: Grammar<Tk>) -> Self {
+            Self {
+                stack: vec![dfa.start.clone()],
+                dfa,
+                grammar,
+            }
+        }
+
+        pub fn process(&mut self, mut token_stream: TokenStream<Tk>) -> bool {
+            while !token_stream.is_eof() {
+                let tk = token_stream.next().unwrap().clone();
+                if !self.process_one(tk, &token_stream) {
+                    break;
+                }
+            }
+            for (idx, state) in self.stack.iter().enumerate() {
+                println!(
+                    "Stack state #{}: {:?}",
+                    idx,
+                    PrintableDFAState(&self.dfa.id_to_state[state], &self.grammar)
+                );
+            }
+
+            return token_stream.is_eof()
+                && self.stack.len() == 2
+                && self.stack[0] == self.dfa.start
+                && self.stack[1] == self.dfa.end;
+        }
+
+        pub fn process_one(&mut self, tk: Tk, token_stream: &TokenStream<Tk>) -> bool {
+            assert!(!self.stack.is_empty());
+
+            // first try to shift
+            // push the next state onto the stack according to the dfa transition table
+            let current_state = self.stack.last().unwrap();
+            if let Some(next_state) =
+                self.dfa.transitions[current_state].get(&Symbol::Term(tk.clone()))
+            {
+                self.stack.push(next_state.clone());
+            }
+
+            // then try to reduce until it's unreduceable
+            loop {
+                let current_state_id = self.stack.last().unwrap();
+                if !self.dfa.final_states.contains(current_state_id) {
+                    break;
+                }
+
+                let current_state = &self.dfa.id_to_state[current_state_id];
+
+                // in final state, need to reduce
+                let rule_to_apply = {
+                    // find which rule to apply
+                    let possible_rules: Vec<usize> = current_state
+                        .0
+                        .iter()
+                        .filter_map(|nfa_state| {
+                            let Item { rule, idx } = nfa_state.0;
+                            if idx == self.grammar[rule].right.len() {
+                                Some(rule)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    assert!(possible_rules.len() == 1, "Ambiguous reduce actions!");
+                    possible_rules[0]
+                };
+
+                // resolve conflict by looking ahead
+                if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id) {
+                    if let Some(next_tk) = token_stream.peek() {
+                        // not in the follow set, should not reduce
+                        if !follow_set.contains(next_tk) {
+                            break;
+                        } else {
+                            trace!(
+                                "Lookahead token '{:?}' is in follow set, reducing by rule {}",
+                                next_tk, rule_to_apply
+                            );
+                        }
+                    }
+                }
+
+                let rule = &self.grammar[rule_to_apply];
+                trace!("Reducing by rule: {:?}", rule);
+                if rule_to_apply == 0
+                    && token_stream.peek().is_none()
+                    && self.stack.last().unwrap() == &self.dfa.end
+                {
+                    trace!("Parse done!");
+                    return false;
+                }
+
+                let to_pop = rule
+                    .right
+                    .iter()
+                    .filter(|sym| match sym {
+                        Symbol::Epsilon => false,
+                        _ => true,
+                    })
+                    .count();
+                for _ in 0..to_pop {
+                    self.stack.pop();
+                }
+                let top_state_id = self.stack.last().unwrap();
+                let top_state = &self.dfa.id_to_state[top_state_id];
+                let goto_state = self.dfa.transitions[top_state_id]
+                    .get(&Symbol::NonTerm(rule.left.clone()))
+                    .expect(&format!(
+                        "No goto state found! state:\n{:?}, symbol: {}",
+                        PrintableDFAState(top_state, &self.grammar),
+                        rule.left.0.clone(),
+                    ));
+                self.stack.push(goto_state.clone());
+            }
+            true
+        }
+    }
     use super::*;
 
     static INIT: std::sync::Once = std::sync::Once::new();
@@ -571,11 +729,7 @@ mod tests {
         );
 
         let dfa = DFA::build(&grammar);
-        let pda = PDA {
-            stack: vec![dfa.start.clone()],
-            dfa,
-            grammar,
-        };
+        let pda = SimplyPDA::new(dfa, grammar);
 
         // let ts = TokenStream::new(vec![
         //     Terminal("a".into()),
@@ -603,7 +757,7 @@ mod tests {
         println!("Result: {}", res);
     }
 
-    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     enum ExprToken {
         LParen,
         RParen,
@@ -621,6 +775,12 @@ mod tests {
                 ExprToken::Star => "*",
                 ExprToken::Identifier(_) => "id",
             }
+        }
+    }
+
+    impl Hash for ExprToken {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.id().hash(state);
         }
     }
 
@@ -652,11 +812,7 @@ mod tests {
         );
 
         let dfa = DFA::build(&grammar);
-        let pda = PDA {
-            stack: vec![dfa.start.clone()],
-            dfa,
-            grammar,
-        };
+        let pda = SimplyPDA::new(dfa, grammar);
 
         let ts = TokenStream::new(vec![
             ExprToken::Identifier("a".into()),
