@@ -1,4 +1,8 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    fmt::Debug,
+    hash::Hash,
+};
 
 use tracing::trace;
 
@@ -7,9 +11,9 @@ use crate::grammar::*;
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NFAState(Item);
 
-pub struct PrintableNFAState<'a>(&'a NFAState, &'a Grammar);
+pub struct PrintableNFAState<'a, Tk: Hash + Eq>(&'a NFAState, &'a Grammar<Tk>);
 
-impl std::fmt::Debug for PrintableNFAState<'_> {
+impl<Tk: TerminalKind + Hash + Eq> std::fmt::Debug for PrintableNFAState<'_, Tk> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let rule = &self.1.rules[(self.0).0.rule];
         let dot_pos = self.0.0.idx;
@@ -19,7 +23,7 @@ impl std::fmt::Debug for PrintableNFAState<'_> {
                 write!(f, "• ")?;
             }
             match sym {
-                Symbol::Term(t) => write!(f, "'{}' ", t.0)?,
+                Symbol::Term(t) => write!(f, "'{}' ", t.id())?,
                 Symbol::NonTerm(nt) => write!(f, "{} ", nt.0)?,
                 Symbol::Epsilon => write!(f, "ε ")?,
             }
@@ -43,9 +47,9 @@ pub struct DFAState(BTreeSet<NFAState>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DfaStateId(usize);
 
-pub struct PrintableDFAState<'a>(&'a DFAState, &'a Grammar);
+pub struct PrintableDFAState<'a, Tk: Hash + Eq>(&'a DFAState, &'a Grammar<Tk>);
 
-impl std::fmt::Debug for PrintableDFAState<'_> {
+impl<Tk: TerminalKind + Hash + Eq> std::fmt::Debug for PrintableDFAState<'_, Tk> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for nfa_state in &self.0.0 {
             writeln!(f, "{:?}", PrintableNFAState(nfa_state, self.1))?;
@@ -61,13 +65,13 @@ impl From<BTreeSet<NFAState>> for DFAState {
 }
 #[allow(unused)]
 #[derive(Clone, Debug)]
-pub struct DFA {
+pub struct DFA<Tk: Hash + Eq> {
     start: DfaStateId,
     end: DfaStateId,
-    transitions: HashMap<DfaStateId, HashMap<Symbol, DfaStateId>>,
+    transitions: HashMap<DfaStateId, HashMap<Symbol<Tk>, DfaStateId>>,
     final_states: HashSet<DfaStateId>,
     // from inadequate state to follow set of the reduce rule
-    conflict_resolver: HashMap<DfaStateId, HashSet<Terminal>>,
+    conflict_resolver: HashMap<DfaStateId, HashSet<Tk>>,
     state_to_id: HashMap<DFAState, DfaStateId>,
     id_to_state: HashMap<DfaStateId, DFAState>,
 }
@@ -79,15 +83,15 @@ pub struct Conflict {
     pub reduce: usize,
 }
 
-impl DFA {
+impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
     // from a NFA to DFA
-    pub fn build(grammar: &Grammar) -> DFA {
+    pub fn build(grammar: &Grammar<Tk>) -> DFA<Tk> {
         // let pseudo_start = NonTerminal("S_prime".into());
 
         // 1. build NFA
 
         // 1.1 build all the transitions
-        let mut transitions: HashMap<NFAState, HashMap<Symbol, BTreeSet<NFAState>>> =
+        let mut transitions: HashMap<NFAState, HashMap<Symbol<Tk>, BTreeSet<NFAState>>> =
             HashMap::new();
         for (rule_num, rule) in grammar.rules.iter().enumerate() {
             for (idx, symbol) in rule.right.iter().enumerate() {
@@ -191,7 +195,8 @@ impl DFA {
             }
         };
 
-        let mut dfa_transitions: HashMap<DfaStateId, HashMap<Symbol, DfaStateId>> = HashMap::new();
+        let mut dfa_transitions: HashMap<DfaStateId, HashMap<Symbol<Tk>, DfaStateId>> =
+            HashMap::new();
         let mut final_states = HashSet::new();
 
         let start_state = DFAState::from(get_closure(Item::new(0, 0).into()));
@@ -324,7 +329,7 @@ impl DFA {
                     PrintableNFAState(&NFAState(shift), grammar)
                 );
                 let rule = &grammar.rules[reduce];
-                trace!("    Reduce by: {}", rule);
+                trace!("    Reduce by: {:?}", rule);
                 let follow = grammar.first_follow_set().follow();
                 let empty_set = HashSet::new();
                 let followers = follow
@@ -377,20 +382,20 @@ impl DFA {
     }
 }
 
-pub struct TokenStream {
-    tokens: Vec<Terminal>,
+pub struct TokenStream<Tk> {
+    tokens: Vec<Tk>,
     position: usize,
 }
 
-impl TokenStream {
-    pub fn new(tokens: Vec<Terminal>) -> Self {
+impl<Tk> TokenStream<Tk> {
+    pub fn new(tokens: Vec<Tk>) -> Self {
         Self {
             tokens,
             position: 0,
         }
     }
 
-    pub fn next(&mut self) -> Option<&Terminal> {
+    pub fn next(&mut self) -> Option<&Tk> {
         if self.position < self.tokens.len() {
             let tk = &self.tokens[self.position];
             self.position += 1;
@@ -400,7 +405,7 @@ impl TokenStream {
         }
     }
 
-    pub fn peek(&self) -> Option<&Terminal> {
+    pub fn peek(&self) -> Option<&Tk> {
         if self.position < self.tokens.len() {
             Some(&self.tokens[self.position])
         } else {
@@ -413,15 +418,15 @@ impl TokenStream {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct PDA {
+#[derive(Clone)]
+pub struct PDA<Tk: Hash + Eq> {
     stack: Vec<DfaStateId>,
-    dfa: DFA,
-    grammar: Grammar,
+    dfa: DFA<Tk>,
+    grammar: Grammar<Tk>,
 }
 
-impl PDA {
-    pub fn process(&mut self, mut token_stream: TokenStream) -> bool {
+impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> PDA<Tk> {
+    pub fn process(&mut self, mut token_stream: TokenStream<Tk>) -> bool {
         while !token_stream.is_eof() {
             let tk = token_stream.next().unwrap().clone();
             if !self.process_one(tk, &token_stream) {
@@ -439,7 +444,7 @@ impl PDA {
         return token_stream.is_eof() && self.stack.len() == 2 && self.stack[0] == self.dfa.start;
     }
 
-    pub fn process_one(&mut self, tk: Terminal, token_stream: &TokenStream) -> bool {
+    pub fn process_one(&mut self, tk: Tk, token_stream: &TokenStream<Tk>) -> bool {
         assert!(!self.stack.is_empty());
 
         // first try to shift
@@ -494,7 +499,7 @@ impl PDA {
             }
 
             let rule = &self.grammar[rule_to_apply];
-            trace!("Reducing by rule: {}", rule);
+            trace!("Reducing by rule: {:?}", rule);
             if rule_to_apply == 0
                 && token_stream.peek().is_none()
                 && self.stack.last().unwrap() == &self.dfa.end
@@ -553,7 +558,7 @@ mod tests {
         //      C -> b b C | b
         //      B -> c d
 
-        let grammar = Grammar::parse(
+        let grammar = parse_lines(
             "S",
             vec![
                 "S -> A B",
@@ -598,10 +603,43 @@ mod tests {
         println!("Result: {}", res);
     }
 
+    #[derive(Clone, Debug, Hash, PartialEq, Eq)]
+    enum ExprToken {
+        LParen,
+        RParen,
+        Plus,
+        Star,
+        Identifier(String),
+    }
+
+    impl TerminalKind for ExprToken {
+        fn id(&self) -> &str {
+            match self {
+                ExprToken::LParen => "(",
+                ExprToken::RParen => ")",
+                ExprToken::Plus => "+",
+                ExprToken::Star => "*",
+                ExprToken::Identifier(_) => "id",
+            }
+        }
+    }
+
+    impl<'a> From<&'a str> for ExprToken {
+        fn from(value: &'a str) -> Self {
+            match value {
+                "(" => Self::LParen,
+                ")" => Self::RParen,
+                "+" => Self::Plus,
+                "*" => Self::Star,
+                other => Self::Identifier(other.into()),
+            }
+        }
+    }
+
     #[test]
     fn test_expr() {
         setup();
-        let grammar = Grammar::parse(
+        let grammar = parse_lines::<_, ExprToken>(
             "E",
             vec![
                 "E -> E + T",
@@ -621,11 +659,11 @@ mod tests {
         };
 
         let ts = TokenStream::new(vec![
-            Terminal("id".into()),
-            Terminal("+".into()),
-            Terminal("id".into()),
-            Terminal("*".into()),
-            Terminal("id".into()),
+            ExprToken::Identifier("a".into()),
+            ExprToken::Plus,
+            ExprToken::Identifier("b".into()),
+            ExprToken::Star,
+            ExprToken::Identifier("c".into()),
         ]);
         let res = pda.clone().process(ts);
         println!("Result: {}", res);
