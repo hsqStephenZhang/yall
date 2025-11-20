@@ -1,8 +1,4 @@
-use crate::{
-    grammar::{TerminalKind, parse_lines},
-    pda::{DFA, PDA, TokenStream},
-};
-
+use crate::grammar::TerminalKind;
 // these are pre-defined AST nodes
 #[derive(Debug)]
 pub enum Expr {
@@ -25,9 +21,7 @@ pub enum Term {
 #[derive(Debug)]
 pub enum Opcode {
     Mul,
-    Div,
     Add,
-    Sub,
 }
 
 #[derive(Debug)]
@@ -42,26 +36,33 @@ impl From<Token> for Identifier {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 enum Token {
     LParen,
     RParen,
     Plus,
-    Minus,
     Star,
-    Devide,
     Identifier(String),
 }
 
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl std::hash::Hash for Token {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id().hash(state);
+    }
+}
 impl<'a> From<&'a str> for Token {
     fn from(s: &str) -> Self {
         match s {
             "(" => Token::LParen,
             ")" => Token::RParen,
             "+" => Token::Plus,
-            "-" => Token::Minus,
             "*" => Token::Star,
-            "/" => Token::Devide,
             id => Token::Identifier(id.to_string()),
         }
     }
@@ -73,22 +74,10 @@ impl TerminalKind for Token {
             Token::LParen => "(",
             Token::RParen => ")",
             Token::Plus => "+",
-            Token::Minus => "-",
             Token::Star => "*",
-            Token::Devide => "/",
             Token::Identifier(_) => "identifier",
         }
     }
-}
-
-#[derive(Debug)]
-pub enum Value {
-    ExprOp(Opcode),
-    Factor(Box<Expr>),
-    FactorOp(Opcode),
-    Term(Box<Expr>),
-    Expr(Box<Expr>),
-    Token(Token),
 }
 
 impl From<Token> for Value {
@@ -97,11 +86,20 @@ impl From<Token> for Value {
     }
 }
 
+#[derive(Debug)]
+pub enum Value {
+    Expr(Box<Expr>),
+    Factor(Box<Expr>),
+    Term(Box<Expr>),
+    ExprOp(Opcode),
+    FactorOp(Opcode),
+    Token(Token),
+}
 impl Value {
-    pub fn into_exprop(self) -> Opcode {
+    pub fn into_expr(self) -> Box<Expr> {
         match self {
-            Value::ExprOp(v) => v,
-            _ => panic!("expected ExprOp node"),
+            Value::Expr(v) => v,
+            _ => panic!("expected Expr node"),
         }
     }
     pub fn into_factor(self) -> Box<Expr> {
@@ -110,22 +108,22 @@ impl Value {
             _ => panic!("expected Factor node"),
         }
     }
-    pub fn into_factorop(self) -> Opcode {
-        match self {
-            Value::FactorOp(v) => v,
-            _ => panic!("expected FactorOp node"),
-        }
-    }
     pub fn into_term(self) -> Box<Expr> {
         match self {
             Value::Term(v) => v,
             _ => panic!("expected Term node"),
         }
     }
-    pub fn into_expr(self) -> Box<Expr> {
+    pub fn into_exprop(self) -> Opcode {
         match self {
-            Value::Expr(v) => v,
-            _ => panic!("expected Expr node"),
+            Value::ExprOp(v) => v,
+            _ => panic!("expected ExprOp node"),
+        }
+    }
+    pub fn into_factorop(self) -> Opcode {
+        match self {
+            Value::FactorOp(v) => v,
+            _ => panic!("expected FactorOp node"),
         }
     }
     pub fn into_token(self) -> Token {
@@ -134,6 +132,9 @@ impl Value {
             _ => panic!("expected Token node"),
         }
     }
+}
+pub fn rule_0(stack: &mut Vec<Value>) -> Value {
+    unreachable!("rule 0's action should never be called")
 }
 pub fn rule_1(stack: &mut Vec<Value>) -> Value {
     let arg3 = stack.pop().unwrap().into_factor();
@@ -153,63 +154,51 @@ pub fn rule_3(stack: &mut Vec<Value>) -> Value {
     Value::ExprOp(result)
 }
 pub fn rule_4(stack: &mut Vec<Value>) -> Value {
-    let arg1 = stack.pop().unwrap().into_token();
-    let result = { Opcode::Sub };
-    Value::ExprOp(result)
-}
-pub fn rule_5(stack: &mut Vec<Value>) -> Value {
     let arg3 = stack.pop().unwrap().into_term();
     let arg2 = stack.pop().unwrap().into_factorop();
     let arg1 = stack.pop().unwrap().into_factor();
     let result = { Box::new(Expr::Op(arg1, arg2, arg3)) };
     Value::Factor(result)
 }
-pub fn rule_6(stack: &mut Vec<Value>) -> Value {
+pub fn rule_5(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_term();
     let result = { arg1 };
     Value::Factor(result)
 }
-pub fn rule_7(stack: &mut Vec<Value>) -> Value {
+pub fn rule_6(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_token();
     let result = { Opcode::Mul };
     Value::FactorOp(result)
 }
-pub fn rule_8(stack: &mut Vec<Value>) -> Value {
-    let arg1 = stack.pop().unwrap().into_token();
-    let result = { Opcode::Div };
-    Value::FactorOp(result)
-}
-pub fn rule_9(stack: &mut Vec<Value>) -> Value {
+pub fn rule_7(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_token();
     let result = { Box::new(Expr::Identifier(arg1.into())) };
     Value::Term(result)
 }
-pub fn rule_10(stack: &mut Vec<Value>) -> Value {
+pub fn rule_8(stack: &mut Vec<Value>) -> Value {
     let arg3 = stack.pop().unwrap().into_token();
     let arg2 = stack.pop().unwrap().into_expr();
     let arg1 = stack.pop().unwrap().into_token();
     let result = { arg2 };
     Value::Term(result)
 }
-type ActionFn = fn(&mut Vec<Value>) -> Value;
-const RULE_TABLE: &[ActionFn] = &[
-    rule_1, rule_2, rule_3, rule_4, rule_5, rule_6, rule_7, rule_8, rule_9, rule_10,
+pub type ActionFn = fn(&mut Vec<Value>) -> Value;
+pub const RULE_TABLE: &[ActionFn] = &[
+    rule_0, rule_1, rule_2, rule_3, rule_4, rule_5, rule_6, rule_7, rule_8,
 ];
 
-static INIT: std::sync::Once = std::sync::Once::new();
-fn setup() {
+#[test]
+fn test_expr() {
+    use crate::pda::*;
+    static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)
             .with_test_writer()
             .try_init();
     });
-}
 
-#[test]
-fn test_expr() {
-    setup();
-    let grammar = parse_lines::<_, Token>(
+    let grammar = crate::grammar::parse_lines::<_, Token>(
         "Expr",
         vec![
             "Expr -> Expr ExprOp Factor",
@@ -222,6 +211,10 @@ fn test_expr() {
             "Term -> ( Expr )",
         ],
     );
+
+    for (idx, rule) in grammar.rules.iter().enumerate() {
+        println!("Rule ID {}: {:?}", idx, rule);
+    }
 
     let dfa = DFA::build(&grammar);
     let mut pda = PDA::new(dfa, grammar, RULE_TABLE);
@@ -238,5 +231,7 @@ fn test_expr() {
     ]);
 
     let res = pda.process(ts);
+    let top = pda.final_value();
     println!("Result: {}", res);
+    println!("AST: {:?}", top.into_expr());
 }

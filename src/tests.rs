@@ -13,7 +13,6 @@ fn t1() {
             rules: vec![
                 // Rule 1: Expr ExprOp Factor => Box::new(Expr::Op(<>))
                 Rule {
-                    id: 1,
                     production: vec![
                         "Expr".to_string(),
                         "ExprOp".to_string(),
@@ -23,7 +22,6 @@ fn t1() {
                 },
                 // Rule 2: Factor
                 Rule {
-                    id: 2,
                     production: vec!["Factor".to_string()],
                     action: "arg1".to_string(),
                 },
@@ -37,17 +35,10 @@ fn t1() {
             name: "ExprOp".to_string(),
             return_type: "Opcode".to_string(),
             rules: vec![
-                // Rule 3: "+" => Opcode::Add
+                // "+" => Opcode::Add
                 Rule {
-                    id: 3,
                     production: vec!["Token::Plus".to_string()],
                     action: "Opcode::Add".to_string(),
-                },
-                // Rule 4: "-" => Opcode::Sub
-                Rule {
-                    id: 4,
-                    production: vec!["Token::Minus".to_string()],
-                    action: "Opcode::Sub".to_string(),
                 },
             ],
         },
@@ -59,9 +50,8 @@ fn t1() {
             name: "Factor".to_string(),
             return_type: "Box<Expr>".to_string(),
             rules: vec![
-                // Rule 5: Factor FactorOp Term => Box::new(Expr::Op(<>))
+                // Factor FactorOp Term => Box::new(Expr::Op(<>))
                 Rule {
-                    id: 5,
                     production: vec![
                         "Factor".to_string(),
                         "FactorOp".to_string(),
@@ -69,9 +59,8 @@ fn t1() {
                     ],
                     action: "Box::new(Expr::Op(arg1, arg2, arg3))".to_string(),
                 },
-                // Rule 6: Term
+                // Term
                 Rule {
-                    id: 6,
                     production: vec!["Term".to_string()],
                     action: "arg1".to_string(),
                 },
@@ -85,17 +74,10 @@ fn t1() {
             name: "FactorOp".to_string(),
             return_type: "Opcode".to_string(),
             rules: vec![
-                // Rule 7: "*" => Opcode::Mul
+                // "*" => Opcode::Mul
                 Rule {
-                    id: 7,
                     production: vec!["Token::Star".to_string()],
                     action: "Opcode::Mul".to_string(),
-                },
-                // Rule 8: "/" => Opcode::Div
-                Rule {
-                    id: 8,
-                    production: vec!["Token::Devide".to_string()],
-                    action: "Opcode::Div".to_string(),
                 },
             ],
         },
@@ -108,12 +90,10 @@ fn t1() {
             return_type: "Box<Expr>".to_string(),
             rules: vec![
                 Rule {
-                    id: 9,
                     production: vec!["Num".to_string()],
                     action: "Box::new(Expr::Identifier(arg1.into()))".to_string(),
                 },
                 Rule {
-                    id: 10,
                     production: vec!["(".to_string(), "Expr".to_string(), ")".to_string()],
                     action: "arg2".to_string(),
                 },
@@ -122,6 +102,7 @@ fn t1() {
     ];
 
     const PRE_DEFINED: &'static str = r#"
+use crate::grammar::TerminalKind;
 // these are pre-defined AST nodes
 #[derive(Debug)]
 pub enum Expr {
@@ -144,9 +125,7 @@ pub enum Term {
 #[derive(Debug)]
 pub enum Opcode {
     Mul,
-    Div,
     Add,
-    Sub,
 }
 
 #[derive(Debug)]
@@ -161,26 +140,34 @@ impl From<Token> for Identifier {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+
+#[derive(Debug, Clone, Eq)]
 enum Token {
     LParen,
     RParen,
     Plus,
-    Minus,
     Star,
-    Devide,
     Identifier(String),
 }
 
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl std::hash::Hash for Token {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id().hash(state);
+    }
+}
 impl<'a> From<&'a str> for Token {
     fn from(s: &str) -> Self {
         match s {
             "(" => Token::LParen,
             ")" => Token::RParen,
             "+" => Token::Plus,
-            "-" => Token::Minus,
             "*" => Token::Star,
-            "/" => Token::Devide,
             id => Token::Identifier(id.to_string()),
         }
     }
@@ -192,9 +179,7 @@ impl TerminalKind for Token {
             Token::LParen => "(",
             Token::RParen => ")",
             Token::Plus => "+",
-            Token::Minus => "-",
             Token::Star => "*",
-            Token::Devide => "/",
             Token::Identifier(_) => "identifier",
         }
     }

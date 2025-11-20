@@ -477,6 +477,7 @@ where
         {
             self.stack.push(next_state.clone());
             self.value_stack.push(tk.into());
+            println!("stack after shift: {:?}", self.value_stack);
         }
 
         // then try to reduce until it's unreduceable
@@ -523,7 +524,7 @@ where
             }
 
             let rule = &self.grammar[rule_to_apply];
-            trace!("Reducing by rule: {:?}", rule);
+            trace!("Reducing by rule {}: {:?}", rule_to_apply, rule);
             if rule_to_apply == 0
                 && token_stream.peek().is_none()
                 && self.stack.last().unwrap() == &self.dfa.end
@@ -556,8 +557,14 @@ where
             self.stack.push(goto_state.clone());
             let result = action_fn(&mut self.value_stack);
             self.value_stack.push(result);
+            println!("stack after reduce: {:?}", self.value_stack);
         }
         true
+    }
+
+    pub fn final_value(self) -> Value {
+        assert!(self.value_stack.len() == 1);
+        self.value_stack.into_iter().next().unwrap()
     }
 }
 
@@ -757,13 +764,19 @@ mod tests {
         println!("Result: {}", res);
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, Eq)]
     enum ExprToken {
         LParen,
         RParen,
         Plus,
         Star,
         Identifier(String),
+    }
+
+    impl PartialEq for ExprToken {
+        fn eq(&self, other: &Self) -> bool {
+            self.id() == other.id()
+        }
     }
 
     impl TerminalKind for ExprToken {
