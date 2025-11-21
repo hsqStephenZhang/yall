@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     fmt::Debug,
@@ -43,6 +44,28 @@ impl From<Item> for NFAState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DFAState(BTreeSet<NFAState>);
+
+impl DFAState {
+    pub fn reduce_rule(&self, grammar: &Grammar<impl Hash + Eq>) -> Option<usize> {
+        let reduce_rules = self
+            .0
+            .iter()
+            .filter_map(|nfa_state| {
+                let Item { rule, idx } = nfa_state.0;
+                if idx == grammar[rule].right.len() {
+                    Some(rule)
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>();
+        if reduce_rules.len() == 1 {
+            Some(*reduce_rules.iter().next().unwrap())
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DfaStateId(usize);
@@ -261,7 +284,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         }
 
         // mark all inadequate states
-        let inadequate_states: HashMap<DfaStateId, (Item, usize)> = final_states
+        let inadequate_states: HashMap<DfaStateId, (HashSet<Item>, usize)> = final_states
             .iter()
             .filter_map(|state_id| {
                 let state = &id_to_state[state_id];
@@ -295,16 +318,34 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                     })
                     .collect::<HashSet<_>>();
                 if reduce_rules.len() > 1 {
-                    panic!("Reduce-reduce conflict detected at state {:?}!", state);
+                    panic!(
+                        "Reduce-reduce conflict detected at state:\n{:?}",
+                        PrintableDFAState(state, grammar)
+                    );
                 } else if shift_rules.len() > 1 {
-                    panic!("Shift-shift conflict detected at state {:?}!", state);
+                    let shift_lookahead = shift_rules
+                        .iter()
+                        .map(|item| {
+                            let Item { rule, idx } = item;
+                            let symbol = &grammar.rules[*rule].right[*idx];
+                            let expect = symbol.name();
+                            expect
+                        })
+                        .collect::<HashSet<_>>();
+                    if shift_lookahead.len() != shift_rules.len() {
+                        panic!(
+                            "Shift-shift conflict cannot be resolved by lookahead at state:\n{:?}",
+                            PrintableDFAState(state, grammar)
+                        );
+                    }
+                    Some((
+                        state_id.clone(),
+                        (shift_rules, *reduce_rules.iter().next().unwrap()),
+                    ))
                 } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
                     Some((
                         state_id.clone(),
-                        (
-                            shift_rules.iter().next().unwrap().clone(),
-                            *reduce_rules.iter().next().unwrap(),
-                        ),
+                        (shift_rules, *reduce_rules.iter().next().unwrap()),
                     ))
                 } else {
                     None
@@ -315,7 +356,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         #[cfg(debug_assertions)]
         {
             use tracing::trace;
-            for (state_id, &(shift, reduce)) in &inadequate_states {
+            for (state_id, (shifts, reduce)) in &inadequate_states {
                 let state = &id_to_state[state_id];
                 trace!(
                     "Inadequate DFA State #{:?}:",
@@ -324,25 +365,36 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                 for nfa_state in &state.0 {
                     trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
                 }
-                trace!(
-                    "    Shift on {:?}",
-                    PrintableNFAState(&NFAState(shift), grammar)
-                );
-                let rule = &grammar.rules[reduce];
-                trace!("    Reduce by: {:?}", rule);
+                for shift in shifts {
+                    trace!(
+                        "    Shift on {:?}",
+                        PrintableNFAState(&NFAState(shift.clone()), grammar)
+                    );
+                }
+
+                let rule = &grammar.rules[*reduce];
+                trace!("    Reduce by rule: {:?}", rule);
                 let follow = grammar.first_follow_set().follow();
                 let empty_set = HashSet::new();
                 let followers = follow
                     .get(&(rule.left.clone().into()))
                     .unwrap_or(&empty_set);
-                let shift_sym = grammar.rules[shift.rule].right[shift.idx]
-                    .clone()
-                    .into_term();
+                let shift_syms = shifts
+                    .iter()
+                    .map(|item| {
+                        let Item { rule, idx } = item;
+                        let symbol = &grammar.rules[*rule].right[*idx];
+                        symbol.clone().into_term()
+                    })
+                    .collect::<HashSet<_>>();
                 trace!(
                     "follower set: {:?}, shift_sym: {:?}, resolved: {}",
                     followers,
-                    shift_sym,
-                    !followers.contains(&shift_sym)
+                    shift_syms,
+                    followers
+                        .intersection(&shift_syms)
+                        .collect::<HashSet<_>>()
+                        .is_empty()
                 );
                 println!();
             }
@@ -490,23 +542,9 @@ where
             let current_state = &self.dfa.id_to_state[current_state_id];
 
             // in final state, need to reduce
-            let rule_to_apply = {
-                // find which rule to apply
-                let possible_rules: Vec<usize> = current_state
-                    .0
-                    .iter()
-                    .filter_map(|nfa_state| {
-                        let Item { rule, idx } = nfa_state.0;
-                        if idx == self.grammar[rule].right.len() {
-                            Some(rule)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                assert!(possible_rules.len() == 1, "Ambiguous reduce actions!");
-                possible_rules[0]
-            };
+            let rule_to_apply = current_state
+                .reduce_rule(&self.grammar)
+                .expect("should exist only one reduce rule");
 
             // resolve conflict by looking ahead
             if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id) {
@@ -633,23 +671,9 @@ mod tests {
                 let current_state = &self.dfa.id_to_state[current_state_id];
 
                 // in final state, need to reduce
-                let rule_to_apply = {
-                    // find which rule to apply
-                    let possible_rules: Vec<usize> = current_state
-                        .0
-                        .iter()
-                        .filter_map(|nfa_state| {
-                            let Item { rule, idx } = nfa_state.0;
-                            if idx == self.grammar[rule].right.len() {
-                                Some(rule)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    assert!(possible_rules.len() == 1, "Ambiguous reduce actions!");
-                    possible_rules[0]
-                };
+                let rule_to_apply = current_state
+                    .reduce_rule(&self.grammar)
+                    .expect("should exist only one reduce rule");
 
                 // resolve conflict by looking ahead
                 if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id) {
@@ -764,12 +788,15 @@ mod tests {
         println!("Result: {}", res);
     }
 
+    #[allow(unused)]
     #[derive(Clone, Debug, Eq)]
     enum ExprToken {
         LParen,
         RParen,
         Plus,
+        Minus,
         Star,
+        Slash,
         Identifier(String),
     }
 
@@ -785,7 +812,9 @@ mod tests {
                 ExprToken::LParen => "(",
                 ExprToken::RParen => ")",
                 ExprToken::Plus => "+",
+                ExprToken::Minus => "-",
                 ExprToken::Star => "*",
+                ExprToken::Slash => "/",
                 ExprToken::Identifier(_) => "id",
             }
         }
@@ -803,7 +832,9 @@ mod tests {
                 "(" => Self::LParen,
                 ")" => Self::RParen,
                 "+" => Self::Plus,
+                "-" => Self::Minus,
                 "*" => Self::Star,
+                "/" => Self::Slash,
                 other => Self::Identifier(other.into()),
             }
         }
@@ -818,6 +849,7 @@ mod tests {
                 "E -> E + T",
                 "E -> T",
                 "T -> T * F",
+                "T -> T / F",
                 "T -> F",
                 "F -> ( E )",
                 "F -> id",
