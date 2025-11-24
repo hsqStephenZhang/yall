@@ -1,6 +1,7 @@
 use std::{
     cell::OnceCell,
     collections::{HashMap, HashSet, VecDeque},
+    fmt::Debug,
     hash::Hash,
     ops::Index,
 };
@@ -264,7 +265,7 @@ impl<Tk: TerminalKind + Hash + Eq> FirstFollow<Tk> {
 #[derive(Debug, Clone)]
 pub struct FollowSet {}
 
-impl<Tk: Clone + TerminalKind + Eq + Hash> Grammar<Tk> {
+impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
     pub fn rules_of(&self, non_term: &NonTerminal) -> impl Iterator<Item = (usize, &Rule<Tk>)> {
         self.rules
             .iter()
@@ -383,16 +384,16 @@ impl<Tk: Clone + TerminalKind + Eq + Hash> Grammar<Tk> {
         }
 
         // print dependencies here
-        #[cfg(debug_assertions)]
-        {
-            for (sym, dep_set) in &deps {
-                tracing::trace!("Deps for {:?}:", sym.name());
-                for dep in dep_set {
-                    tracing::trace!("  {:?}", dep.name());
-                }
-            }
-            tracing::trace!("");
-        }
+        // #[cfg(debug_assertions)]
+        // {
+        //     for (sym, dep_set) in &deps {
+        //         tracing::trace!("Deps for {:?}:", sym.name());
+        //         for dep in dep_set {
+        //             tracing::trace!("  {:?}", dep.name());
+        //         }
+        //     }
+        //     tracing::trace!("");
+        // }
 
         let nonterm_to_rules = self.rules.iter().enumerate().fold(
             HashMap::<NonTerminal, Vec<usize>>::new(),
@@ -460,37 +461,73 @@ impl<Tk: Clone + TerminalKind + Eq + Hash> Grammar<Tk> {
 
         debug!("calculating follow set");
 
-        let mut follow_set: HashMap<Symbol<Tk>, HashSet<Tk>> = HashMap::new();
-        for rule in self.rules.iter().filter(|rule| !rule.right.is_empty()) {
-            for idx in 0..(rule.right.len() - 1) {
-                if matches!(&rule.right[idx], Symbol::NonTerm(_)) {
-                    let mut all_follower_syms = vec![];
-                    let mut follower_sym_idx = idx + 1;
-                    while follower_sym_idx < rule.right.len() {
-                        all_follower_syms.push(follower_sym_idx);
+        // two rules for calculating Follow set:
+        //      1. for A -> α B β γ, add First(β) to Follow(B) ; if β could be empty, recursively check γ
+        //      2. for A -> α B, add Follow(A) to Follow(B)
+        // (here α β γ represents any symbol kind, terminal or non-terminal, B is a non-terminal)
+        //
+        // we will iterate to a fixed point
 
-                        let sym = &rule.right[follower_sym_idx];
-                        if let Symbol::NonTerm(nt) = sym
-                            && could_be_empty.contains(nt)
-                        {
-                            follower_sym_idx += 1;
-                        } else {
-                            break;
+        let mut follow_set: HashMap<Symbol<Tk>, HashSet<Tk>> = HashMap::new();
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+
+            for rule in self.rules.iter().filter(|rule| !rule.right.is_empty()) {
+                for idx in 0..rule.right.len() {
+                    if matches!(&rule.right[idx], Symbol::NonTerm(_)) {
+                        let mut all_follower_syms = vec![];
+                        let mut follower_sym_idx = idx + 1;
+                        while follower_sym_idx < rule.right.len() {
+                            all_follower_syms.push(follower_sym_idx);
+
+                            let sym = &rule.right[follower_sym_idx];
+                            if let Symbol::NonTerm(nt) = sym
+                                && could_be_empty.contains(nt)
+                            {
+                                follower_sym_idx += 1;
+                            } else {
+                                break;
+                            }
                         }
-                    }
-                    for &follower_idx in &all_follower_syms {
-                        follow_set
-                            .entry(rule.right[idx].clone())
-                            .or_default()
-                            .extend(
+
+                        // case 2 get
+                        let maybe_left_follow_set = if follower_sym_idx == rule.right.len() {
+                            follow_set.get(&Symbol::NonTerm(rule.left.clone())).cloned()
+                        } else {
+                            None
+                        };
+
+                        let follower = follow_set.entry(rule.right[idx].clone()).or_default();
+                        let before_size = follower.len();
+
+                        // case 2 add
+                        if let Some(left_follow_set) = maybe_left_follow_set {
+                            follower.extend(left_follow_set);
+                        }
+
+                        // case 1
+                        for &follower_idx in &all_follower_syms {
+                            follower.extend(
                                 first_set
                                     .get(&rule.right[follower_idx])
                                     .cloned()
                                     .unwrap_or_default(),
                             );
+                        }
+                        let after_size = follower.len();
+
+                        if after_size > before_size {
+                            changed = true;
+                        }
                     }
                 }
             }
+        }
+
+        for item in follow_set.iter() {
+            debug!("Initial follow({:?}) = {:?}", item.0, item.1);
         }
 
         FirstFollow {

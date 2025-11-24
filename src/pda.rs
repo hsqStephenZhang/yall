@@ -541,6 +541,7 @@ where
         let current_state = self.stack.last().unwrap();
         if let Some(next_state) = self.dfa.transitions[current_state].get(&Symbol::Term(tk.clone()))
         {
+            trace!("Shifted token: {:?}", tk);
             self.stack.push(next_state.clone());
             self.value_stack.push(tk.into());
             println!("stack after shift: {:?}", self.value_stack);
@@ -672,6 +673,7 @@ mod tests {
             if let Some(next_state) =
                 self.dfa.transitions[current_state].get(&Symbol::Term(tk.clone()))
             {
+                trace!("Shifted token: {:?}", tk);
                 self.stack.push(next_state.clone());
             }
 
@@ -910,6 +912,26 @@ mod tests {
             Terminal("a".into()),
             Terminal("e".into()),
             Terminal("d".into()),
+        ]);
+        let res = pda.clone().process(ts);
+        println!("Result: {}", res);
+    }
+
+    #[test]
+    fn test_lalr() {
+        setup();
+        let grammar = parse_lines::<_, Terminal>(
+            "S",
+            vec!["S -> L = R", "S -> R", "L -> * R", "L -> id", "R -> L"],
+        );
+        let dfa = DFA::build(&grammar);
+        let pda = SimplyPDA::new(dfa, grammar);
+
+        let ts = TokenStream::new(vec![
+            Terminal("id".into()),
+            Terminal("=".into()),
+            Terminal("*".into()),
+            Terminal("id".into()),
         ]);
         let res = pda.clone().process(ts);
         println!("Result: {}", res);
