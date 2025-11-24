@@ -508,20 +508,6 @@ impl<Tk: Hash + Eq> Index<usize> for Grammar<Tk> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Item {
-    // num of rule within the grammar
-    pub rule: usize,
-    // the '•' position
-    pub idx: usize,
-}
-
-impl Item {
-    pub fn new(rule: usize, idx: usize) -> Self {
-        Self { rule, idx }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

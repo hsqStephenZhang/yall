@@ -9,6 +9,20 @@ use tracing::trace;
 
 use crate::grammar::*;
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Item {
+    // num of rule within the grammar
+    pub rule: usize,
+    // the '•' position
+    pub idx: usize,
+}
+
+impl Item {
+    pub fn new(rule: usize, idx: usize) -> Self {
+        Self { rule, idx }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NFAState(Item);
 
@@ -865,6 +879,37 @@ mod tests {
             ExprToken::Identifier("b".into()),
             ExprToken::Star,
             ExprToken::Identifier("c".into()),
+        ]);
+        let res = pda.clone().process(ts);
+        println!("Result: {}", res);
+    }
+
+    #[test]
+    fn test_slr() {
+        // S → a E c
+        // S → a F d
+        // S → b F c
+        // S → b E d
+        // E → e
+        // F → e
+        let grammar = parse_lines::<_, Terminal>(
+            "S",
+            vec![
+                "S -> a E c",
+                "S -> a F d",
+                "S -> b F c",
+                "S -> b E d",
+                "E -> e",
+                "F -> e",
+            ],
+        );
+        let dfa = DFA::build(&grammar);
+        let pda = SimplyPDA::new(dfa, grammar);
+
+        let ts = TokenStream::new(vec![
+            Terminal("a".into()),
+            Terminal("e".into()),
+            Terminal("d".into()),
         ]);
         let res = pda.clone().process(ts);
         println!("Result: {}", res);
