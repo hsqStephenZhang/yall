@@ -320,12 +320,11 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
         let mut all_syms = self
             .rules
             .iter()
-            .map(|rule| {
+            .flat_map(|rule| {
                 let mut right = rule.right.clone();
                 right.push(rule.left.clone().into());
                 right
             })
-            .flatten()
             .collect::<HashSet<_>>();
         all_syms.remove(&Symbol::Epsilon);
 
@@ -452,7 +451,7 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
                     let mut changed = false;
                     let rules = nonterm_to_rules
                         .get(non_terminal)
-                        .expect(&format!("No rules for non-terminal {:?}", non_terminal));
+                        .unwrap_or_else(|| panic!("No rules for non-terminal {:?}", non_terminal));
                     for &rule_num in rules {
                         let rule = &self.rules[rule_num];
                         for sym in &rule.right {

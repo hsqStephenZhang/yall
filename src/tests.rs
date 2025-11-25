@@ -102,6 +102,8 @@ fn t1() {
     ];
 
     const PRE_DEFINED: &'static str = r#"
+#![allow(unused)]
+
 use crate::grammar::TerminalKind;
 // these are pre-defined AST nodes
 #[derive(Debug)]
@@ -129,7 +131,7 @@ pub enum Opcode {
 }
 
 #[derive(Debug)]
-pub struct Identifier(String);
+pub struct Identifier(pub String);
 
 impl From<Token> for Identifier {
     fn from(token: Token) -> Self {
@@ -161,7 +163,8 @@ impl std::hash::Hash for Token {
         self.id().hash(state);
     }
 }
-impl<'a> From<&'a str> for Token {
+
+impl From<&str> for Token {
     fn from(s: &str) -> Self {
         match s {
             "(" => Token::LParen,
@@ -190,10 +193,62 @@ impl From<Token> for Value {
         Value::Token(token)
     }
 }
+"#;
 
+    let usage = r#"
+
+#[test]
+fn test_expr() {
+    use crate::pda::*;
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .try_init();
+    });
+
+    let grammar = crate::grammar::parse_lines::<_, Token>(
+        "Expr",
+        vec![
+            "Expr -> Expr ExprOp Factor",
+            "Expr -> Factor",
+            "ExprOp -> +",
+            "Factor -> Factor FactorOp Term",
+            "Factor -> Term",
+            "FactorOp -> *",
+            "Term -> Identifier",
+            "Term -> ( Expr )",
+        ],
+    );
+
+    for (idx, rule) in grammar.rules.iter().enumerate() {
+        println!("Rule ID {}: {:?}", idx, rule);
+    }
+
+    let dfa = DFA::build(&grammar);
+    let mut pda = PDA::new(dfa, grammar, RULE_TABLE);
+    let ts = TokenStream::new(vec![
+        Token::Identifier("x".to_string()),
+        Token::Plus,
+        Token::Identifier("y".to_string()),
+        Token::Star,
+        Token::LParen,
+        Token::Identifier("z".to_string()),
+        Token::Plus,
+        Token::Identifier("w".to_string()),
+        Token::RParen,
+    ]);
+
+    let res = pda.process(ts);
+    let top = pda.final_value();
+    println!("Result: {}", res);
+    println!("AST: {:?}", top.into_expr());
+}
 "#;
 
     let generator = Generator::new(&defs);
-    let generated_code = PRE_DEFINED.to_string() + "\n" + &generator.generate(&defs).to_string();
+    let generated_code =
+        PRE_DEFINED.to_string() + "\n" + &generator.generate(&defs).to_string() + usage;
     std::fs::write("src/generated.rs", generated_code).unwrap();
 }

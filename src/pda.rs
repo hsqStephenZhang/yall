@@ -139,7 +139,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                 let cur: NFAState = Item::new(rule_num, idx).into();
                 let next: NFAState = Item::new(rule_num, idx + 1).into();
                 transitions
-                    .entry(cur.clone())
+                    .entry(cur)
                     .or_default()
                     .entry(symbol.clone())
                     .or_default()
@@ -150,7 +150,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                     for (target_rule_num, _) in grammar.rules_of(nonterm) {
                         let next: NFAState = Item::new(target_rule_num, 0).into();
                         transitions
-                            .entry(cur.clone())
+                            .entry(cur)
                             .or_default()
                             .entry(Symbol::Epsilon)
                             .or_default()
@@ -304,8 +304,8 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         // mark all inadequate states
         let inadequate_states: HashMap<DfaStateId, (HashSet<Item>, usize)> = final_states
             .iter()
-            .filter_map(|state_id| {
-                let state = &id_to_state[state_id];
+            .filter_map(|&state_id| {
+                let state = &id_to_state[&state_id];
                 let reduce_rules: HashSet<usize> = state
                     .0
                     .iter()
@@ -346,8 +346,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                         .map(|item| {
                             let Item { rule, idx } = item;
                             let symbol = &grammar.rules[*rule].right[*idx];
-                            let expect = symbol.name();
-                            expect
+                            symbol.name()
                         })
                         .collect::<HashSet<_>>();
                     if shift_lookahead.len() != shift_rules.len() {
@@ -357,12 +356,12 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                         );
                     }
                     Some((
-                        state_id.clone(),
+                        state_id,
                         (shift_rules, *reduce_rules.iter().next().unwrap()),
                     ))
                 } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
                     Some((
-                        state_id.clone(),
+                        state_id,
                         (shift_rules, *reduce_rules.iter().next().unwrap()),
                     ))
                 } else {
@@ -386,7 +385,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                 for shift in shifts {
                     trace!(
                         "    Shift on {:?}",
-                        PrintableNFAState(&NFAState(shift.clone()), grammar)
+                        PrintableNFAState(&NFAState(*shift), grammar)
                     );
                 }
 
@@ -434,10 +433,9 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             })
             .collect();
 
-        let end = dfa_transitions[&start]
+        let end = *dfa_transitions[&start]
             .get(&Symbol::NonTerm(grammar.start_sym.clone()))
-            .unwrap()
-            .clone();
+            .unwrap();
 
         // let first_follow = grammar.first_follow_set();
         DFA {
@@ -470,8 +468,8 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         while changed {
             changed = false;
 
-            for cur_state in self.transitions.keys() {
-                let dfa_state = &self.id_to_state[cur_state];
+            for &cur_state in self.transitions.keys() {
+                let dfa_state = &self.id_to_state[&cur_state];
                 for nfa_state in &dfa_state.0 {
                     let Item { rule, idx } = nfa_state.0;
                     let grammar_rule = &grammar.rules[rule];
@@ -483,7 +481,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                             // inside the state, the lookahead can only be propagated if the rest could be empty
                             if could_be_empty(rest) {
                                 first_set.extend(
-                                    set.get(&(*cur_state, nfa_state.0))
+                                    set.get(&(cur_state, nfa_state.0))
                                         .cloned()
                                         .unwrap_or_default(),
                                 );
@@ -505,7 +503,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
 
                             // rule 1, inside the cur_state
                             for item in expansions {
-                                let key = (cur_state.clone(), item.0);
+                                let key = (cur_state, item.0);
                                 let entry = set.entry(key).or_default();
                                 let before_size = entry.len();
                                 entry.extend(first_set.iter().cloned());
@@ -516,12 +514,11 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                         }
 
                         // rule 2, from cur_state to next_state
-                        if let Some(next_state) = self.transitions[cur_state].get(&symbol)
-                            && let Some(lookahead_set) =
-                                set.get(&(*cur_state, nfa_state.0)).cloned()
+                        if let Some(next_state) = self.transitions[&cur_state].get(symbol)
+                            && let Some(lookahead_set) = set.get(&(cur_state, nfa_state.0)).cloned()
                         {
                             let next_item = Item::new(rule, idx + 1);
-                            let key = (next_state.clone(), next_item);
+                            let key = (*next_state, next_item);
                             let entry = set.entry(key).or_default();
                             let before_size = entry.len();
                             entry.extend(lookahead_set.iter().cloned());
@@ -535,12 +532,9 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         }
 
         // filter empty lookahead entries
-        let set = set
-            .into_iter()
+        set.into_iter()
             .filter(|(_, lookahead_set)| !lookahead_set.is_empty())
-            .collect();
-
-        set
+            .collect()
     }
 }
 
@@ -557,16 +551,6 @@ impl<Tk> TokenStream<Tk> {
         }
     }
 
-    pub fn next(&mut self) -> Option<&Tk> {
-        if self.position < self.tokens.len() {
-            let tk = &self.tokens[self.position];
-            self.position += 1;
-            Some(tk)
-        } else {
-            None
-        }
-    }
-
     pub fn peek(&self) -> Option<&Tk> {
         if self.position < self.tokens.len() {
             Some(&self.tokens[self.position])
@@ -577,6 +561,20 @@ impl<Tk> TokenStream<Tk> {
 
     pub fn is_eof(&self) -> bool {
         self.position >= self.tokens.len()
+    }
+}
+
+impl<Tk: Clone> Iterator for TokenStream<Tk> {
+    type Item = Tk;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.position < self.tokens.len() {
+            let tk = self.tokens[self.position].clone();
+            self.position += 1;
+            Some(tk)
+        } else {
+            None
+        }
     }
 }
 
@@ -600,7 +598,7 @@ where
         actions: &'a [fn(&mut Vec<Value>) -> Value],
     ) -> Self {
         Self {
-            stack: vec![dfa.start.clone()],
+            stack: vec![dfa.start],
             value_stack: vec![],
             dfa,
             grammar,
@@ -623,10 +621,10 @@ where
             );
         }
 
-        return token_stream.is_eof()
+        token_stream.is_eof()
             && self.stack.len() == 2
             && self.stack[0] == self.dfa.start
-            && self.stack[1] == self.dfa.end;
+            && self.stack[1] == self.dfa.end
     }
 
     pub fn process_one(&mut self, tk: Tk, token_stream: &TokenStream<Tk>) -> bool {
@@ -638,7 +636,7 @@ where
         if let Some(next_state) = self.dfa.transitions[current_state].get(&Symbol::Term(tk.clone()))
         {
             trace!("Shifted token: {:?}", tk);
-            self.stack.push(next_state.clone());
+            self.stack.push(*next_state);
             self.value_stack.push(tk.into());
             println!("stack after shift: {:?}", self.value_stack);
         }
@@ -658,17 +656,17 @@ where
                 .expect("should exist only one reduce rule");
 
             // resolve conflict by looking ahead
-            if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id) {
-                if let Some(next_tk) = token_stream.peek() {
-                    // not in the follow set, should not reduce
-                    if !follow_set.contains(next_tk) {
-                        break;
-                    } else {
-                        trace!(
-                            "Lookahead token '{:?}' is in follow set, reducing by rule {}",
-                            next_tk, rule_to_apply
-                        );
-                    }
+            if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id)
+                && let Some(next_tk) = token_stream.peek()
+            {
+                // not in the follow set, should not reduce
+                if !follow_set.contains(next_tk) {
+                    break;
+                } else {
+                    trace!(
+                        "Lookahead token '{:?}' is in follow set, reducing by rule {}",
+                        next_tk, rule_to_apply
+                    );
                 }
             }
 
@@ -685,10 +683,7 @@ where
             let to_pop = rule
                 .right
                 .iter()
-                .filter(|sym| match sym {
-                    Symbol::Epsilon => false,
-                    _ => true,
-                })
+                .filter(|sym| !matches!(sym, Symbol::Epsilon))
                 .count();
             for _ in 0..to_pop {
                 self.stack.pop();
@@ -698,12 +693,14 @@ where
             let top_state = &self.dfa.id_to_state[top_state_id];
             let goto_state = self.dfa.transitions[top_state_id]
                 .get(&Symbol::NonTerm(rule.left.clone()))
-                .expect(&format!(
-                    "No goto state found! state:\n{:?}, symbol: {}",
-                    PrintableDFAState(top_state, &self.grammar),
-                    rule.left.0.clone(),
-                ));
-            self.stack.push(goto_state.clone());
+                .unwrap_or_else(|| {
+                    panic!(
+                        "No goto state found! state:\n{:?}, symbol: {}",
+                        PrintableDFAState(top_state, &self.grammar),
+                        rule.left.0.clone(),
+                    )
+                });
+            self.stack.push(*goto_state);
             let result = action_fn(&mut self.value_stack);
             self.value_stack.push(result);
             println!("stack after reduce: {:?}", self.value_stack);

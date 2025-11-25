@@ -71,7 +71,7 @@ impl Generator {
             let error_msg = format!("expected {} node", variant_name_str);
 
             methods.push(quote! {
-                pub fn #method_name(self) -> #rust_type {
+                fn #method_name(self) -> #rust_type {
                     match self {
                         Value::#variant_ident(v) => v,
                         _ => panic!(#error_msg),
@@ -87,7 +87,7 @@ impl Generator {
 
         quote! {
             #[derive(Debug)]
-            pub enum Value {
+            enum Value {
                 #(#variants),*
             }
 
@@ -102,7 +102,8 @@ impl Generator {
 
         let fn0_name = format_ident!("rule_{}", 0usize);
         funcs.push(quote! {
-            pub fn #fn0_name(stack: &mut Vec<Value>) -> Value {
+            #[allow(clippy::ptr_arg)]
+            fn #fn0_name(stack: &mut Vec<Value>) -> Value {
                 unreachable!("rule 0's action should never be called")
             }
         });
@@ -126,7 +127,7 @@ impl Generator {
                     let arg_name = format_ident!("arg{}", i + 1); // arg1, arg2...
 
                     let target_variant = if self.symbol_type_map.contains_key(symbol) {
-                        &symbol
+                        symbol
                     } else {
                         "Token"
                     };
@@ -141,7 +142,7 @@ impl Generator {
                     syn::parse_str(&rule.action).expect("Invalid action code");
 
                 funcs.push(quote! {
-                    pub fn #fn_name(stack: &mut Vec<Value>) -> Value {
+                    fn #fn_name(stack: &mut Vec<Value>) -> Value {
                         #(#pops)*
                         let result = { #user_action };
                         Value::#result_variant(result)
@@ -175,8 +176,8 @@ impl Generator {
         }
 
         quote! {
-            pub type ActionFn = fn(&mut Vec<Value>) -> Value;
-            pub const RULE_TABLE: &[ActionFn] = &[
+            type ActionFn = fn(&mut Vec<Value>) -> Value;
+            const RULE_TABLE: &[ActionFn] = &[
                 #(#rows),*
             ];
         }

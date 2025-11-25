@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::grammar::TerminalKind;
 // these are pre-defined AST nodes
 #[derive(Debug)]
@@ -25,7 +27,7 @@ pub enum Opcode {
 }
 
 #[derive(Debug)]
-pub struct Identifier(String);
+pub struct Identifier(pub String);
 
 impl From<Token> for Identifier {
     fn from(token: Token) -> Self {
@@ -56,7 +58,8 @@ impl std::hash::Hash for Token {
         self.id().hash(state);
     }
 }
-impl<'a> From<&'a str> for Token {
+
+impl From<&str> for Token {
     fn from(s: &str) -> Self {
         match s {
             "(" => Token::LParen,
@@ -87,103 +90,104 @@ impl From<Token> for Value {
 }
 
 #[derive(Debug)]
-pub enum Value {
-    Expr(Box<Expr>),
-    Factor(Box<Expr>),
-    Term(Box<Expr>),
+enum Value {
     ExprOp(Opcode),
+    Expr(Box<Expr>),
+    Term(Box<Expr>),
     FactorOp(Opcode),
+    Factor(Box<Expr>),
     Token(Token),
 }
 impl Value {
-    pub fn into_expr(self) -> Box<Expr> {
-        match self {
-            Value::Expr(v) => v,
-            _ => panic!("expected Expr node"),
-        }
-    }
-    pub fn into_factor(self) -> Box<Expr> {
-        match self {
-            Value::Factor(v) => v,
-            _ => panic!("expected Factor node"),
-        }
-    }
-    pub fn into_term(self) -> Box<Expr> {
-        match self {
-            Value::Term(v) => v,
-            _ => panic!("expected Term node"),
-        }
-    }
-    pub fn into_exprop(self) -> Opcode {
+    fn into_exprop(self) -> Opcode {
         match self {
             Value::ExprOp(v) => v,
             _ => panic!("expected ExprOp node"),
         }
     }
-    pub fn into_factorop(self) -> Opcode {
+    fn into_expr(self) -> Box<Expr> {
+        match self {
+            Value::Expr(v) => v,
+            _ => panic!("expected Expr node"),
+        }
+    }
+    fn into_term(self) -> Box<Expr> {
+        match self {
+            Value::Term(v) => v,
+            _ => panic!("expected Term node"),
+        }
+    }
+    fn into_factorop(self) -> Opcode {
         match self {
             Value::FactorOp(v) => v,
             _ => panic!("expected FactorOp node"),
         }
     }
-    pub fn into_token(self) -> Token {
+    fn into_factor(self) -> Box<Expr> {
+        match self {
+            Value::Factor(v) => v,
+            _ => panic!("expected Factor node"),
+        }
+    }
+    fn into_token(self) -> Token {
         match self {
             Value::Token(v) => v,
             _ => panic!("expected Token node"),
         }
     }
 }
-pub fn rule_0(stack: &mut Vec<Value>) -> Value {
+#[allow(clippy::ptr_arg)]
+fn rule_0(stack: &mut Vec<Value>) -> Value {
     unreachable!("rule 0's action should never be called")
 }
-pub fn rule_1(stack: &mut Vec<Value>) -> Value {
+fn rule_1(stack: &mut Vec<Value>) -> Value {
     let arg3 = stack.pop().unwrap().into_factor();
     let arg2 = stack.pop().unwrap().into_exprop();
     let arg1 = stack.pop().unwrap().into_expr();
     let result = { Box::new(Expr::Op(arg1, arg2, arg3)) };
     Value::Expr(result)
 }
-pub fn rule_2(stack: &mut Vec<Value>) -> Value {
+fn rule_2(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_factor();
     let result = { arg1 };
     Value::Expr(result)
 }
-pub fn rule_3(stack: &mut Vec<Value>) -> Value {
+fn rule_3(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_token();
     let result = { Opcode::Add };
     Value::ExprOp(result)
 }
-pub fn rule_4(stack: &mut Vec<Value>) -> Value {
+fn rule_4(stack: &mut Vec<Value>) -> Value {
     let arg3 = stack.pop().unwrap().into_term();
     let arg2 = stack.pop().unwrap().into_factorop();
     let arg1 = stack.pop().unwrap().into_factor();
     let result = { Box::new(Expr::Op(arg1, arg2, arg3)) };
     Value::Factor(result)
 }
-pub fn rule_5(stack: &mut Vec<Value>) -> Value {
+fn rule_5(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_term();
     let result = { arg1 };
     Value::Factor(result)
 }
-pub fn rule_6(stack: &mut Vec<Value>) -> Value {
+fn rule_6(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_token();
     let result = { Opcode::Mul };
     Value::FactorOp(result)
 }
-pub fn rule_7(stack: &mut Vec<Value>) -> Value {
+fn rule_7(stack: &mut Vec<Value>) -> Value {
     let arg1 = stack.pop().unwrap().into_token();
     let result = { Box::new(Expr::Identifier(arg1.into())) };
     Value::Term(result)
 }
-pub fn rule_8(stack: &mut Vec<Value>) -> Value {
+fn rule_8(stack: &mut Vec<Value>) -> Value {
     let arg3 = stack.pop().unwrap().into_token();
     let arg2 = stack.pop().unwrap().into_expr();
     let arg1 = stack.pop().unwrap().into_token();
     let result = { arg2 };
     Value::Term(result)
 }
-pub type ActionFn = fn(&mut Vec<Value>) -> Value;
-pub const RULE_TABLE: &[ActionFn] = &[
+type ActionFn = fn(&mut Vec<Value>) -> Value;
+const RULE_TABLE: &[ActionFn] = &[
     rule_0, rule_1, rule_2, rule_3, rule_4, rule_5, rule_6, rule_7, rule_8,
 ];
 
