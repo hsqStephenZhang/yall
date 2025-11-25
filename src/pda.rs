@@ -88,9 +88,14 @@ pub struct PrintableDFAState<'a, Tk: Hash + Eq>(&'a DFAState, &'a Grammar<Tk>);
 
 impl<Tk: TerminalKind + Hash + Eq> std::fmt::Debug for PrintableDFAState<'_, Tk> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for nfa_state in &self.0.0 {
-            writeln!(f, "{:?}", PrintableNFAState(nfa_state, self.1))?;
+        for nfa_state in self.0.0.iter().take(self.0.0.len() - 1) {
+            write!(f, "{:?}, ", PrintableNFAState(nfa_state, self.1))?;
         }
+        write!(
+            f,
+            "{:?}",
+            PrintableNFAState(self.0.0.iter().last().unwrap(), self.1)
+        )?;
         Ok(())
     }
 }
@@ -124,8 +129,6 @@ pub struct Conflict {
 impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
     // from a NFA to DFA
     pub fn build(grammar: &Grammar<Tk>) -> DFA<Tk> {
-        // let pseudo_start = NonTerminal("S_prime".into());
-
         // 1. build NFA
 
         // 1.1 build all the transitions
