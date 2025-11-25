@@ -128,6 +128,44 @@ pub struct Grammar<Tk: Hash + Eq> {
     pub first_and_follow: OnceCell<FirstFollow<Tk>>,
 }
 
+impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
+    pub fn could_be_empty_nonterms(&self) -> HashSet<NonTerminal> {
+        self.rules
+            .iter()
+            .filter_map(|rule| {
+                if rule.right.is_empty() {
+                    Some(rule.left.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>()
+    }
+
+    pub fn first_set_of_symbols(&self, symbols: &[Symbol<Tk>]) -> HashSet<Tk>
+    where
+        Tk: Clone,
+    {
+        let could_be_empty = self.could_be_empty_nonterms();
+        let first_set = self.first_follow_set().first();
+        let mut result = HashSet::new();
+
+        for sym in symbols {
+            let first_set = first_set.get(sym);
+            if let Some(first) = first_set {
+                result.extend(first.clone());
+            }
+            match sym {
+                Symbol::NonTerm(nt) if could_be_empty.contains(nt) => {}
+                Symbol::Epsilon => {}
+                _ => break,
+            }
+        }
+
+        result
+    }
+}
+
 pub fn parse_lines<S, T>(start_sym: &str, raw_rules: Vec<S>) -> Grammar<T>
 where
     S: AsRef<str>,
@@ -295,17 +333,7 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
 
         // from sym to the syms that depend on it (for the first set)
         // we don't take account of epsilon here
-        let mut could_be_empty = self
-            .rules
-            .iter()
-            .filter_map(|rule| {
-                if rule.right.is_empty() {
-                    Some(rule.left.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<HashSet<_>>();
+        let mut could_be_empty = self.could_be_empty_nonterms();
 
         let mut might_be_empty_rules = self
             .rules

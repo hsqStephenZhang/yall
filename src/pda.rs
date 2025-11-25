@@ -100,6 +100,7 @@ impl From<BTreeSet<NFAState>> for DFAState {
         Self(value)
     }
 }
+
 #[allow(unused)]
 #[derive(Clone, Debug)]
 pub struct DFA<Tk: Hash + Eq> {
@@ -445,6 +446,98 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             state_to_id,
             id_to_state,
         }
+    }
+
+    pub fn build_lookahead_for_lalr(
+        &self,
+        grammar: &Grammar<Tk>,
+    ) -> HashMap<(DfaStateId, Item), HashSet<Tk>> {
+        let mut set: HashMap<(DfaStateId, Item), HashSet<Tk>> = HashMap::new();
+
+        let could_be_empty_nonterms = grammar.could_be_empty_nonterms();
+        let could_be_empty = |syms: &[Symbol<Tk>]| -> bool {
+            syms.iter().all(|sym| match sym {
+                Symbol::NonTerm(nt) => could_be_empty_nonterms.contains(nt),
+                Symbol::Epsilon => true,
+                Symbol::Term(_) => false,
+            })
+        };
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+
+            for cur_state in self.transitions.keys() {
+                let dfa_state = &self.id_to_state[cur_state];
+                for nfa_state in &dfa_state.0 {
+                    let Item { rule, idx } = nfa_state.0;
+                    let grammar_rule = &grammar.rules[rule];
+                    if let Some(symbol) = grammar_rule.right.get(idx) {
+                        // rule 1, propagate inside the cur_state(closure)
+                        if matches!(symbol, Symbol::NonTerm(_)) {
+                            let rest = &grammar_rule.right[idx + 1..];
+                            let mut first_set = grammar.first_set_of_symbols(rest);
+                            // inside the state, the lookahead can only be propagated if the rest could be empty
+                            if could_be_empty(rest) {
+                                first_set.extend(
+                                    set.get(&(*cur_state, nfa_state.0))
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                );
+                            }
+
+                            let expansions = dfa_state.0.iter().filter(|s| {
+                                let Item { rule: r, idx: i } = s.0;
+                                if i == 0 {
+                                    let left = &grammar.rules[r].left;
+                                    if let Symbol::NonTerm(nt) = &grammar_rule.right[idx] {
+                                        left == nt
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            });
+
+                            // rule 1, inside the cur_state
+                            for item in expansions {
+                                let key = (cur_state.clone(), item.0);
+                                let entry = set.entry(key).or_default();
+                                let before_size = entry.len();
+                                entry.extend(first_set.iter().cloned());
+                                if entry.len() > before_size {
+                                    changed = true;
+                                }
+                            }
+                        }
+
+                        // rule 2, from cur_state to next_state
+                        if let Some(next_state) = self.transitions[cur_state].get(&symbol)
+                            && let Some(lookahead_set) =
+                                set.get(&(*cur_state, nfa_state.0)).cloned()
+                        {
+                            let next_item = Item::new(rule, idx + 1);
+                            let key = (next_state.clone(), next_item);
+                            let entry = set.entry(key).or_default();
+                            let before_size = entry.len();
+                            entry.extend(lookahead_set.iter().cloned());
+                            if entry.len() > before_size {
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // filter empty lookahead entries
+        let set = set
+            .into_iter()
+            .filter(|(_, lookahead_set)| !lookahead_set.is_empty())
+            .collect();
+
+        set
     }
 }
 
@@ -925,15 +1018,33 @@ mod tests {
             vec!["S -> L = R", "S -> R", "L -> * R", "L -> id", "R -> L"],
         );
         let dfa = DFA::build(&grammar);
-        let pda = SimplyPDA::new(dfa, grammar);
+        let lookahead = dfa.build_lookahead_for_lalr(&grammar);
+        for ((state_id, item), lookahead_set) in &lookahead {
+            println!(
+                "State {:?}, Item {:?}, Lookahead: {:?}",
+                PrintableDFAState(&dfa.id_to_state[state_id], &grammar),
+                PrintableNFAState(&NFAState(item.clone()), &grammar),
+                lookahead_set
+            );
+        }
+    }
 
-        let ts = TokenStream::new(vec![
-            Terminal("id".into()),
-            Terminal("=".into()),
-            Terminal("*".into()),
-            Terminal("id".into()),
-        ]);
-        let res = pda.clone().process(ts);
-        println!("Result: {}", res);
+    #[test]
+    fn test_lalr2() {
+        setup();
+        let grammar = parse_lines::<_, Terminal>(
+            "S",
+            vec!["S -> A a", "S -> b A c", "S -> d c", "S -> b d a", "A -> d"],
+        );
+        let dfa = DFA::build(&grammar);
+        let lookahead = dfa.build_lookahead_for_lalr(&grammar);
+        for ((state_id, item), lookahead_set) in &lookahead {
+            println!(
+                "State {:?}, Item {:?}, Lookahead: {:?}",
+                PrintableDFAState(&dfa.id_to_state[state_id], &grammar),
+                PrintableNFAState(&NFAState(item.clone()), &grammar),
+                lookahead_set
+            );
+        }
     }
 }
