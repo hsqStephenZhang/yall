@@ -1,7 +1,8 @@
-use crate::generator::*;
-use crate::grammar::*;
 use std::collections::HashSet;
 use std::hash::Hash;
+
+use crate::generator::*;
+use crate::grammar::*;
 
 pub fn parse_lines<S, T>(start_sym: &str, raw_rules: Vec<S>) -> Grammar<T>
 where
@@ -47,10 +48,7 @@ where
                 .collect()
         };
 
-        Rule {
-            left: left_nt,
-            right: right_syms,
-        }
+        Rule { left: left_nt, right: right_syms }
     }));
 
     Grammar::new(pseudo_start_sym, start_sym, rules)
@@ -77,10 +75,7 @@ fn test_hardcode_expr_parser_generator() {
                     action: "`rule1`".to_string(),
                 },
                 // Rule 2: Factor
-                GenRule {
-                    production: vec!["Factor".to_string()],
-                    action: "arg1".to_string(),
-                },
+                GenRule { production: vec!["Factor".to_string()], action: "arg1".to_string() },
             ],
         },
         // ExprOp: Opcode = {
@@ -116,10 +111,7 @@ fn test_hardcode_expr_parser_generator() {
                     action: "Box::new(Expr::Op(arg1, arg2, arg3))".to_string(),
                 },
                 // Term
-                GenRule {
-                    production: vec!["Term".to_string()],
-                    action: "arg1".to_string(),
-                },
+                GenRule { production: vec!["Term".to_string()], action: "arg1".to_string() },
             ],
         },
         // FactorOp: Opcode = {

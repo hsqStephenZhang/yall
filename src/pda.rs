@@ -1,13 +1,12 @@
 use core::panic;
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::iter::Peekable;
-use std::{fmt::Debug, hash::Hash};
 
 use tracing::trace;
 
-use crate::{
-    grammar::*,
-    nfa_dfa::{DFA, DfaStateId, PrintableDFAState},
-};
+use crate::grammar::*;
+use crate::nfa_dfa::{DFA, DfaStateId, PrintableDFAState};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Item {
@@ -44,14 +43,7 @@ where
         actioner: Actioner,
         actions: &'a [fn(&mut Actioner, &mut Vec<Value>) -> Value],
     ) -> Self {
-        Self {
-            stack: vec![dfa.start],
-            value_stack: vec![],
-            dfa,
-            grammar,
-            actioner,
-            actions,
-        }
+        Self { stack: vec![dfa.start], value_stack: vec![], dfa, grammar, actioner, actions }
     }
 
     pub fn process<I: Iterator<Item = Tk>>(&mut self, mut token_stream: Peekable<I>) -> bool {
@@ -132,11 +124,7 @@ where
                 return false;
             }
 
-            let to_pop = rule
-                .right
-                .iter()
-                .filter(|sym| !matches!(sym, Symbol::Epsilon))
-                .count();
+            let to_pop = rule.right.iter().filter(|sym| !matches!(sym, Symbol::Epsilon)).count();
             for _ in 0..to_pop {
                 self.stack.pop();
             }
@@ -184,11 +172,7 @@ mod tests {
         Tk: Clone + TerminalKind + Hash + Eq + Debug,
     {
         pub fn new(dfa: DFA<Tk>, grammar: Grammar<Tk>) -> Self {
-            Self {
-                stack: vec![dfa.start.clone()],
-                dfa,
-                grammar,
-            }
+            Self { stack: vec![dfa.start.clone()], dfa, grammar }
         }
 
         pub fn process<I: Iterator<Item = Tk>>(&mut self, mut token_stream: Peekable<I>) -> bool {
@@ -316,14 +300,7 @@ mod tests {
 
         let grammar = parse_lines(
             "S",
-            vec![
-                "S -> A B",
-                "S -> A",
-                "A -> a C c",
-                "C -> b b C",
-                "C -> b",
-                "B -> c d",
-            ],
+            vec!["S -> A B", "S -> A", "A -> a C c", "C -> b b C", "C -> b", "B -> c d"],
         );
 
         let dfa = DFA::build(&grammar);
@@ -439,23 +416,12 @@ mod tests {
         // F → e
         let grammar = parse_lines::<_, Terminal>(
             "S",
-            vec![
-                "S -> a E c",
-                "S -> a F d",
-                "S -> b F c",
-                "S -> b E d",
-                "E -> e",
-                "F -> e",
-            ],
+            vec!["S -> a E c", "S -> a F d", "S -> b F c", "S -> b E d", "E -> e", "F -> e"],
         );
         let dfa = DFA::build(&grammar);
         let pda = SimplyPDA::new(dfa, grammar);
 
-        let ts = vec![
-            Terminal("a".into()),
-            Terminal("e".into()),
-            Terminal("d".into()),
-        ];
+        let ts = vec![Terminal("a".into()), Terminal("e".into()), Terminal("d".into())];
         let res = pda.clone().process(ts.into_iter().peekable());
         println!("Result: {}", res);
     }

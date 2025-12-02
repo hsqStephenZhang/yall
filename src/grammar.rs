@@ -1,10 +1,8 @@
-use std::{
-    cell::OnceCell,
-    collections::{HashMap, HashSet, VecDeque},
-    fmt::Debug,
-    hash::Hash,
-    ops::Index,
-};
+use std::cell::OnceCell;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::ops::Index;
 
 use tracing::debug;
 
@@ -74,11 +72,7 @@ impl<Tk: TerminalKind> Symbol<Tk> {
 
 impl<Tk: TerminalKind> Symbol<Tk> {
     pub fn into_term(self) -> Tk {
-        if let Self::Term(term) = self {
-            term
-        } else {
-            panic!()
-        }
+        if let Self::Term(term) = self { term } else { panic!() }
     }
 }
 
@@ -159,13 +153,11 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
         self.emptyables.get_or_init(|| {
             self.rules
                 .iter()
-                .filter_map(|rule| {
-                    if rule.right.is_empty() {
-                        Some(rule.left.clone())
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(
+                    |rule| {
+                        if rule.right.is_empty() { Some(rule.left.clone()) } else { None }
+                    },
+                )
                 .collect::<HashSet<_>>()
         })
     }
@@ -279,10 +271,7 @@ pub enum CompareOption {
 
 impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
     pub fn rules_of(&self, non_term: &NonTerminal) -> impl Iterator<Item = (usize, &Rule<Tk>)> {
-        self.rules
-            .iter()
-            .enumerate()
-            .filter(|(_, rule)| rule.left == *non_term)
+        self.rules.iter().enumerate().filter(|(_, rule)| rule.left == *non_term)
     }
 
     pub fn calculate_first_set(&self) -> HashMap<Symbol<Tk>, HashSet<Tk>> {
@@ -339,10 +328,8 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
                 break;
             }
 
-            might_be_empty_rules = might_be_empty_rules
-                .difference(&rules_to_remove)
-                .cloned()
-                .collect::<HashSet<_>>();
+            might_be_empty_rules =
+                might_be_empty_rules.difference(&rules_to_remove).cloned().collect::<HashSet<_>>();
         }
 
         // print all the emptyable Non-terminals here
@@ -397,10 +384,7 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
 
             let changed = match &cur {
                 Symbol::Term(term) => {
-                    first_set
-                        .entry(cur.clone())
-                        .or_default()
-                        .insert(term.clone());
+                    first_set.entry(cur.clone()).or_default().insert(term.clone());
                     true
                 }
                 Symbol::NonTerm(non_terminal) => {
@@ -516,10 +500,7 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
             }
         }
 
-        follow_set
-            .into_iter()
-            .filter(|(_, terms)| !terms.is_empty())
-            .collect::<HashMap<_, _>>()
+        follow_set.into_iter().filter(|(_, terms)| !terms.is_empty()).collect::<HashMap<_, _>>()
     }
 }
 
@@ -554,37 +535,21 @@ mod tests {
         assert_eq!(grammar.rules[1].left, NonTerminal::new("S"));
         assert_eq!(
             grammar.rules[1].right,
-            vec![
-                Symbol::NonTerm(NonTerminal::new("A")),
-                Symbol::NonTerm(NonTerminal::new("B")),
-            ]
+            vec![Symbol::NonTerm(NonTerminal::new("A")), Symbol::NonTerm(NonTerminal::new("B")),]
         );
         assert_eq!(grammar.rules[2].left, NonTerminal::new("A"));
-        assert_eq!(
-            grammar.rules[2].right,
-            vec![Symbol::Term(Terminal::new("a"))]
-        );
+        assert_eq!(grammar.rules[2].right, vec![Symbol::Term(Terminal::new("a"))]);
         assert_eq!(grammar.rules[3].left, NonTerminal::new("A"));
         assert_eq!(grammar.rules[3].right, vec![]);
         assert_eq!(grammar.rules[4].left, NonTerminal::new("B"));
-        assert_eq!(
-            grammar.rules[4].right,
-            vec![Symbol::Term(Terminal::new("b"))]
-        );
+        assert_eq!(grammar.rules[4].right, vec![Symbol::Term(Terminal::new("b"))]);
     }
 
     #[test]
     fn test_parse2() {
         let grammar = parse_lines::<_, Terminal>(
             "E",
-            vec![
-                "E -> E + T",
-                "E -> T",
-                "T -> T * F",
-                "T -> F",
-                "F -> ( E )",
-                "F -> id",
-            ],
+            vec!["E -> E + T", "E -> T", "T -> T * F", "T -> F", "F -> ( E )", "F -> id"],
         );
 
         assert_eq!(grammar.start_sym, NonTerminal::new("E"));
@@ -598,22 +563,10 @@ mod tests {
         let first_set = grammar.first_set();
 
         let expect = new_set(vec![
-            (
-                grammar.pseudo_start_sym.clone().into(),
-                vec![Terminal::new("a"), Terminal::new("b")],
-            ),
-            (
-                Symbol::NonTerm(NonTerminal::new("S")),
-                vec![Terminal::new("a"), Terminal::new("b")],
-            ),
-            (
-                Symbol::NonTerm(NonTerminal::new("A")),
-                vec![Terminal::new("a")],
-            ),
-            (
-                Symbol::NonTerm(NonTerminal::new("B")),
-                vec![Terminal::new("b")],
-            ),
+            (grammar.pseudo_start_sym.clone().into(), vec![Terminal::new("a"), Terminal::new("b")]),
+            (Symbol::NonTerm(NonTerminal::new("S")), vec![Terminal::new("a"), Terminal::new("b")]),
+            (Symbol::NonTerm(NonTerminal::new("A")), vec![Terminal::new("a")]),
+            (Symbol::NonTerm(NonTerminal::new("B")), vec![Terminal::new("b")]),
             (Symbol::Term(Terminal::new("a")), vec![Terminal::new("a")]),
             (Symbol::Term(Terminal::new("b")), vec![Terminal::new("b")]),
         ]);
@@ -624,14 +577,7 @@ mod tests {
     fn test_first_set2() {
         let grammar = parse_lines(
             "E",
-            vec![
-                "E -> E + T",
-                "E -> T",
-                "T -> T * F",
-                "T -> F",
-                "F -> ( E )",
-                "F -> id",
-            ],
+            vec!["E -> E + T", "E -> T", "T -> T * F", "T -> F", "F -> ( E )", "F -> id"],
         );
 
         let first_set = grammar.first_set();
@@ -641,18 +587,9 @@ mod tests {
                 grammar.pseudo_start_sym.clone().into(),
                 vec![Terminal::new("("), Terminal::new("id")],
             ),
-            (
-                NonTerminal::new("E").into(),
-                vec![Terminal::new("("), Terminal::new("id")],
-            ),
-            (
-                NonTerminal::new("T").into(),
-                vec![Terminal::new("("), Terminal::new("id")],
-            ),
-            (
-                NonTerminal::new("F").into(),
-                vec![Terminal::new("("), Terminal::new("id")],
-            ),
+            (NonTerminal::new("E").into(), vec![Terminal::new("("), Terminal::new("id")]),
+            (NonTerminal::new("T").into(), vec![Terminal::new("("), Terminal::new("id")]),
+            (NonTerminal::new("F").into(), vec![Terminal::new("("), Terminal::new("id")]),
             (Symbol::Term(Terminal::new("+")), vec![Terminal::new("+")]),
             (Symbol::Term(Terminal::new("*")), vec![Terminal::new("*")]),
             (Symbol::Term(Terminal::new("(")), vec![Terminal::new("(")]),
@@ -666,27 +603,14 @@ mod tests {
     fn test_follow_set() {
         let grammar = parse_lines(
             "S",
-            vec![
-                "S -> A B",
-                "S -> A",
-                "A -> a C c",
-                "C -> b b C",
-                "C -> b",
-                "B -> c d",
-            ],
+            vec!["S -> A B", "S -> A", "A -> a C c", "C -> b b C", "C -> b", "B -> c d"],
         );
 
         // we will ignore the $ pseduo terminal symbol at the end
         let first_follow = grammar.follow_set();
         let expect = new_set(vec![
-            (
-                Symbol::NonTerm(NonTerminal::new("A")),
-                vec![Terminal::new("c")],
-            ),
-            (
-                Symbol::NonTerm(NonTerminal::new("C")),
-                vec![Terminal::new("c")],
-            ),
+            (Symbol::NonTerm(NonTerminal::new("A")), vec![Terminal::new("c")]),
+            (Symbol::NonTerm(NonTerminal::new("C")), vec![Terminal::new("c")]),
         ]);
         assert_eq!(first_follow, &expect);
     }

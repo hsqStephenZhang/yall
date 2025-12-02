@@ -1,9 +1,7 @@
 use core::panic;
-use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
-    fmt::Debug,
-    hash::Hash,
-};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::fmt::Debug;
+use std::hash::Hash;
 
 use crate::grammar::*;
 
@@ -70,18 +68,10 @@ impl DFAState {
             .iter()
             .filter_map(|nfa_state| {
                 let Item { rule, idx } = nfa_state.0;
-                if idx == grammar[rule].right.len() {
-                    Some(rule)
-                } else {
-                    None
-                }
+                if idx == grammar[rule].right.len() { Some(rule) } else { None }
             })
             .collect::<HashSet<_>>();
-        if reduce_rules.len() == 1 {
-            Some(*reduce_rules.iter().next().unwrap())
-        } else {
-            None
-        }
+        if reduce_rules.len() == 1 { Some(*reduce_rules.iter().next().unwrap()) } else { None }
     }
 }
 
@@ -101,11 +91,7 @@ impl<Tk: TerminalKind + Hash + Eq> std::fmt::Debug for PrintableDFAState<'_, Tk>
         for nfa_state in self.0.0.iter().take(self.0.0.len() - 1) {
             write!(f, "{:?}, ", PrintableNFAState(nfa_state, self.1))?;
         }
-        write!(
-            f,
-            "{:?}",
-            PrintableNFAState(self.0.0.iter().last().unwrap(), self.1)
-        )?;
+        write!(f, "{:?}", PrintableNFAState(self.0.0.iter().last().unwrap(), self.1))?;
         Ok(())
     }
 }
@@ -151,12 +137,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             for (idx, symbol) in rule.right.iter().enumerate() {
                 let cur: NFAState = Item::new(rule_num, idx).into();
                 let next: NFAState = Item::new(rule_num, idx + 1).into();
-                transitions
-                    .entry(cur)
-                    .or_default()
-                    .entry(symbol.clone())
-                    .or_default()
-                    .insert(next);
+                transitions.entry(cur).or_default().entry(symbol.clone()).or_default().insert(next);
 
                 // add epsilon transition if the symbol next to dot is non-terminal
                 if let Symbol::NonTerm(nonterm) = symbol {
@@ -212,10 +193,8 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
 
         // 2. NFA to DFA
         let get_closure = |nfa_state: NFAState| {
-            let mut res = epsilon_closure_excluding_self
-                .get(&nfa_state)
-                .cloned()
-                .unwrap_or_default();
+            let mut res =
+                epsilon_closure_excluding_self.get(&nfa_state).cloned().unwrap_or_default();
             res.insert(nfa_state);
             res
         };
@@ -280,10 +259,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
 
                 let next_id = get_or_new_state_id(&DFAState(next_dfa_state.clone()));
 
-                dfa_transitions
-                    .entry(cur_id)
-                    .or_default()
-                    .insert(action, next_id);
+                dfa_transitions.entry(cur_id).or_default().insert(action, next_id);
 
                 worklist.push_back(next_dfa_state.into());
             }
@@ -310,11 +286,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                     .iter()
                     .filter_map(|nfa_state| {
                         let Item { rule, idx } = nfa_state.0;
-                        if idx == grammar[rule].right.len() {
-                            Some(rule)
-                        } else {
-                            None
-                        }
+                        if idx == grammar[rule].right.len() { Some(rule) } else { None }
                     })
                     .collect();
                 let shift_rules: HashSet<Item> = state
@@ -354,15 +326,9 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                             PrintableDFAState(state, grammar)
                         );
                     }
-                    Some((
-                        state_id,
-                        (shift_rules, *reduce_rules.iter().next().unwrap()),
-                    ))
+                    Some((state_id, (shift_rules, *reduce_rules.iter().next().unwrap())))
                 } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
-                    Some((
-                        state_id,
-                        (shift_rules, *reduce_rules.iter().next().unwrap()),
-                    ))
+                    Some((state_id, (shift_rules, *reduce_rules.iter().next().unwrap())))
                 } else {
                     None
                 }
@@ -374,27 +340,19 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             use tracing::trace;
             for (state_id, (shifts, reduce)) in &inadequate_states {
                 let state = &id_to_state[state_id];
-                trace!(
-                    "Inadequate DFA State #{:?}:",
-                    state_to_id.get(state).unwrap()
-                );
+                trace!("Inadequate DFA State #{:?}:", state_to_id.get(state).unwrap());
                 for nfa_state in &state.0 {
                     trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
                 }
                 for shift in shifts {
-                    trace!(
-                        "    Shift on {:?}",
-                        PrintableNFAState(&NFAState(*shift), grammar)
-                    );
+                    trace!("    Shift on {:?}", PrintableNFAState(&NFAState(*shift), grammar));
                 }
 
                 let rule = &grammar.rules[*reduce];
                 trace!("    Reduce by rule: {:?}", rule);
                 let follow = grammar.follow_set();
                 let empty_set = HashSet::new();
-                let followers = follow
-                    .get(&(rule.left.clone().into()))
-                    .unwrap_or(&empty_set);
+                let followers = follow.get(&(rule.left.clone().into())).unwrap_or(&empty_set);
                 let shift_syms = shifts
                     .iter()
                     .map(|item| {
@@ -407,10 +365,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                     "follower set: {:?}, shift_sym: {:?}, resolved: {}",
                     followers,
                     shift_syms,
-                    followers
-                        .intersection(&shift_syms)
-                        .collect::<HashSet<_>>()
-                        .is_empty()
+                    followers.intersection(&shift_syms).collect::<HashSet<_>>().is_empty()
                 );
                 println!();
             }
@@ -424,16 +379,13 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                 let rule = &grammar.rules[reduce];
                 let follow = grammar.follow_set();
                 let empty_set = HashSet::new();
-                let followers = follow
-                    .get(&(rule.left.clone().into()))
-                    .unwrap_or(&empty_set);
+                let followers = follow.get(&(rule.left.clone().into())).unwrap_or(&empty_set);
                 (state, followers.clone())
             })
             .collect();
 
-        let end = *dfa_transitions[&start]
-            .get(&Symbol::NonTerm(grammar.start_sym.clone()))
-            .unwrap();
+        let end =
+            *dfa_transitions[&start].get(&Symbol::NonTerm(grammar.start_sym.clone())).unwrap();
 
         DFA {
             start,
@@ -478,9 +430,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                             // inside the state, the lookahead can only be propagated if the rest could be empty
                             if could_be_empty(rest) {
                                 first_set.extend(
-                                    set.get(&(cur_state, nfa_state.0))
-                                        .cloned()
-                                        .unwrap_or_default(),
+                                    set.get(&(cur_state, nfa_state.0)).cloned().unwrap_or_default(),
                                 );
                             }
 
@@ -526,8 +476,6 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         }
 
         // filter empty lookahead entries
-        set.into_iter()
-            .filter(|(_, lookahead_set)| !lookahead_set.is_empty())
-            .collect()
+        set.into_iter().filter(|(_, lookahead_set)| !lookahead_set.is_empty()).collect()
     }
 }

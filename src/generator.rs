@@ -1,7 +1,7 @@
+use std::collections::{HashMap, HashSet};
+
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use std::collections::HashMap;
-use std::collections::HashSet;
 
 /// a group of rules for a non-terminal
 /// like
@@ -146,11 +146,8 @@ impl Generator {
                 for (i, symbol) in rule.production.iter().enumerate().rev() {
                     let arg_name = format_ident!("arg{}", i + 1); // arg1, arg2...
 
-                    let target_variant = if self.symbol_type_map.contains_key(symbol) {
-                        symbol
-                    } else {
-                        "Token"
-                    };
+                    let target_variant =
+                        if self.symbol_type_map.contains_key(symbol) { symbol } else { "Token" };
                     let conversion_method = format_ident!("into_{}", target_variant.to_lowercase());
 
                     pops.push(quote! {
@@ -173,9 +170,8 @@ impl Generator {
 
                 let user_action: TokenStream =
                     syn::parse_str(rule.action.trim_matches('`')).expect("Invalid action code");
-                let arg_idents: Vec<proc_macro2::Ident> = (1..=rule.production.len())
-                    .map(|i| format_ident!("arg{}", i))
-                    .collect();
+                let arg_idents: Vec<proc_macro2::Ident> =
+                    (1..=rule.production.len()).map(|i| format_ident!("arg{}", i)).collect();
                 let args = if arg_idents.len() == 1 {
                     let only_arg = &arg_idents[0];
                     quote! { #only_arg }
