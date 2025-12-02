@@ -196,22 +196,6 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct First<Tk: Eq + Hash> {
-    first: HashMap<Symbol<Tk>, HashSet<Tk>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Follow<Tk: Eq + Hash> {
-    follow: HashMap<Symbol<Tk>, HashSet<Tk>>,
-}
-
-impl<Tk: Hash + Eq> First<Tk> {
-    pub fn first(&self) -> &HashMap<Symbol<Tk>, HashSet<Tk>> {
-        &self.first
-    }
-}
-
 #[cfg(test)]
 pub enum CompareOption {
     First,
@@ -219,62 +203,12 @@ pub enum CompareOption {
     Both,
 }
 
-// impl<Tk: TerminalKind + Hash + Eq> First<Tk> {
-//     #[cfg(test)]
-//     fn new_for_test(expect_first: Vec<(Symbol<Tk>, Vec<Tk>)>) -> FirstFollow<Tk> {
-//         let mut first = HashMap::new();
-//         for (sym, terms) in expect_first {
-//             first.insert(sym, terms.into_iter().collect());
-//         }
-//         let mut follow = HashMap::new();
-//         for (sym, terms) in expect_follow {
-//             follow.insert(sym, terms.into_iter().collect());
-//         }
-
-//         FirstFollow { first, follow }
-//     }
-
-//     #[cfg(test)]
-//     fn assert_eq(&self, cmp_opt: CompareOption, other: &Self) -> bool {
-//         fn assert_set_eq<Tk: TerminalKind + Hash + Eq>(
-//             set_name: &str,
-//             set1: &HashMap<Symbol<Tk>, HashSet<Tk>>,
-//             set2: &HashMap<Symbol<Tk>, HashSet<Tk>>,
-//         ) -> bool {
-//             if set1 != set2 {
-//                 print!("difference in {}\n", set_name);
-//                 println!("left:");
-//                 for (sym, terms) in set1 {
-//                     let term_ids = terms.iter().map(|t| t.id()).collect::<Vec<_>>();
-//                     println!("  {}: {:?}", sym.name(), term_ids);
-//                 }
-//                 println!("right:");
-//                 for (sym, terms) in set2 {
-//                     let term_ids = terms.iter().map(|t| t.id()).collect::<Vec<_>>();
-//                     println!("  {}: {:?}", sym.name(), term_ids);
-//                 }
-//                 false
-//             } else {
-//                 true
-//             }
-//         }
-//         match cmp_opt {
-//             CompareOption::First => assert_set_eq("First", &self.first, &other.first),
-//             CompareOption::Follow => assert_set_eq("Follow", &self.follow, &other.follow),
-//             CompareOption::Both => {
-//                 assert_set_eq("First", &self.first, &other.first)
-//                     && assert_set_eq("Follow", &self.follow, &other.follow)
-//             }
-//         }
-//     }
-// }
-
 impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
     pub fn rules_of(&self, non_term: &NonTerminal) -> impl Iterator<Item = (usize, &Rule<Tk>)> {
         self.rules.iter().enumerate().filter(|(_, rule)| rule.left == *non_term)
     }
 
-    pub fn calculate_first_set(&self) -> HashMap<Symbol<Tk>, HashSet<Tk>> {
+    fn calculate_first_set(&self) -> HashMap<Symbol<Tk>, HashSet<Tk>> {
         let mut all_syms = self
             .rules
             .iter()
@@ -331,14 +265,6 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
             might_be_empty_rules =
                 might_be_empty_rules.difference(&rules_to_remove).cloned().collect::<HashSet<_>>();
         }
-
-        // print all the emptyable Non-terminals here
-        // #[cfg(debug_assertions)]
-        // {
-        //     for nt in &could_be_empty {
-        //         println!("Could be empty: {:?}", nt);
-        //     }
-        // }
 
         // 2. calcualte the deps
         //    (we define deps(x) by all the symbols y where First() is needed to compute First(y))
