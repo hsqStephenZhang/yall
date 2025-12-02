@@ -1,4 +1,5 @@
 pub mod grammar;
+pub mod nfa_dfa;
 pub mod pda;
 
 pub mod generated;

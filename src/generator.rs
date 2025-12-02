@@ -3,15 +3,23 @@ use quote::{format_ident, quote};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+/// a group of rules for a non-terminal
+/// like
+/// ```yall grammar
+/// pub Expr: Box<Expr> = {
+///     Expr -> Expr ExprOp Factor { ... }
+///     Factor
+/// };
+/// ```
 #[derive(Debug, Clone)]
-pub struct NonTerminalRules {
+pub struct GenRuleGroup {
     pub name: String,
     pub return_type: String,
-    pub rules: Vec<Rule>,
+    pub rules: Vec<GenRule>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Rule {
+pub struct GenRule {
     pub production: Vec<String>,
     pub action: String,
 }
@@ -26,7 +34,7 @@ pub struct Generator {
 }
 
 impl Generator {
-    pub fn new(defs: &[NonTerminalRules]) -> Self {
+    pub fn new(defs: &[GenRuleGroup]) -> Self {
         let mut symbol_type_map = HashMap::new();
 
         for nt in defs {
@@ -36,7 +44,7 @@ impl Generator {
         Self { symbol_type_map }
     }
 
-    pub fn generate(&self, defs: &[NonTerminalRules]) -> TokenStream {
+    pub fn generate(&self, defs: &[GenRuleGroup]) -> TokenStream {
         let value_enum = self.gen_value_enum();
         let action_fns = self.gen_action_fns(defs);
         let table = self.gen_table(defs);
@@ -97,13 +105,25 @@ impl Generator {
         }
     }
 
-    fn gen_action_fns(&self, defs: &[NonTerminalRules]) -> TokenStream {
+    /// ```ignore
+    // for rule "Expr -> Expr ExprOp Factor", we should generate:
+    // ```rust
+    /// fn rule_1_action(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+    ///     let arg3 = stack.pop().unwrap().into_factor();
+    ///     let arg2 = stack.pop().unwrap().into_exprop();
+    ///     let arg1 = stack.pop().unwrap().into_expr();
+    ///     let args = (arg1, arg2, arg3);
+    ///     let result = SemanticAction::rule1(action, args);
+    ///     Value::Expr(result)
+    /// }
+    /// ```
+    fn gen_action_fns(&self, defs: &[GenRuleGroup]) -> TokenStream {
         let mut funcs = Vec::new();
 
         let fn0_name = format_ident!("rule_{}", 0usize);
         funcs.push(quote! {
             #[allow(clippy::ptr_arg)]
-            fn #fn0_name(stack: &mut Vec<Value>) -> Value {
+            fn #fn0_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
                 unreachable!("rule 0's action should never be called")
             }
         });
@@ -138,13 +158,36 @@ impl Generator {
                     });
                 }
 
+                if !rule.action.starts_with("`") {
+                    let user_action: TokenStream =
+                        syn::parse_str(&rule.action).expect("Invalid action code");
+                    funcs.push(quote! {
+                        fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+                            #(#pops)*
+                            let result = { #user_action };
+                            Value::#result_variant(result)
+                        }
+                    });
+                    continue;
+                }
+
                 let user_action: TokenStream =
-                    syn::parse_str(&rule.action).expect("Invalid action code");
+                    syn::parse_str(rule.action.trim_matches('`')).expect("Invalid action code");
+                let arg_idents: Vec<proc_macro2::Ident> = (1..=rule.production.len())
+                    .map(|i| format_ident!("arg{}", i))
+                    .collect();
+                let args = if arg_idents.len() == 1 {
+                    let only_arg = &arg_idents[0];
+                    quote! { #only_arg }
+                } else {
+                    quote! { ( #(#arg_idents),* ) }
+                };
 
                 funcs.push(quote! {
-                    fn #fn_name(stack: &mut Vec<Value>) -> Value {
+                    fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
                         #(#pops)*
-                        let result = { #user_action };
+                        let args = #args;
+                        let result = SemanticAction::#user_action(action, args);
                         Value::#result_variant(result)
                     }
                 });
@@ -156,7 +199,7 @@ impl Generator {
         }
     }
 
-    fn gen_table(&self, defs: &[NonTerminalRules]) -> TokenStream {
+    fn gen_table(&self, defs: &[GenRuleGroup]) -> TokenStream {
         let mut rows = Vec::new();
         let fn_name = format_ident!("rule_{}", 0usize);
         rows.push(quote! {
@@ -176,7 +219,7 @@ impl Generator {
         }
 
         quote! {
-            type ActionFn = fn(&mut Vec<Value>) -> Value;
+            type ActionFn = fn(&mut SemanticAction, &mut Vec<Value>) -> Value;
             const RULE_TABLE: &[ActionFn] = &[
                 #(#rows),*
             ];

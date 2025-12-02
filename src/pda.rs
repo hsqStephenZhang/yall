@@ -1,13 +1,13 @@
 use core::panic;
-use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
-    fmt::Debug,
-    hash::Hash,
-};
+use std::iter::Peekable;
+use std::{fmt::Debug, hash::Hash};
 
 use tracing::trace;
 
-use crate::grammar::*;
+use crate::{
+    grammar::*,
+    nfa_dfa::{DFA, DfaStateId, PrintableDFAState},
+};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Item {
@@ -23,571 +23,17 @@ impl Item {
     }
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NFAState(Item);
-
-pub struct PrintableNFAState<'a, Tk: Hash + Eq>(&'a NFAState, &'a Grammar<Tk>);
-
-impl<Tk: TerminalKind + Hash + Eq> std::fmt::Debug for PrintableNFAState<'_, Tk> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let rule = &self.1.rules[(self.0).0.rule];
-        let dot_pos = self.0.0.idx;
-        write!(f, "{} -> ", rule.left.0)?;
-        for (idx, sym) in rule.right.iter().enumerate() {
-            if idx == dot_pos {
-                write!(f, "• ")?;
-            }
-            match sym {
-                Symbol::Term(t) => write!(f, "'{}' ", t.id())?,
-                Symbol::NonTerm(nt) => write!(f, "{} ", nt.0)?,
-                Symbol::Epsilon => write!(f, "ε ")?,
-            }
-        }
-        if dot_pos == rule.right.len() {
-            write!(f, "•")?;
-        }
-        Ok(())
-    }
-}
-
-impl From<Item> for NFAState {
-    fn from(value: Item) -> Self {
-        Self(value)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DFAState(BTreeSet<NFAState>);
-
-impl DFAState {
-    pub fn reduce_rule(&self, grammar: &Grammar<impl Hash + Eq>) -> Option<usize> {
-        let reduce_rules = self
-            .0
-            .iter()
-            .filter_map(|nfa_state| {
-                let Item { rule, idx } = nfa_state.0;
-                if idx == grammar[rule].right.len() {
-                    Some(rule)
-                } else {
-                    None
-                }
-            })
-            .collect::<HashSet<_>>();
-        if reduce_rules.len() == 1 {
-            Some(*reduce_rules.iter().next().unwrap())
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DfaStateId(usize);
-
-pub struct PrintableDFAState<'a, Tk: Hash + Eq>(&'a DFAState, &'a Grammar<Tk>);
-
-impl<Tk: TerminalKind + Hash + Eq> std::fmt::Debug for PrintableDFAState<'_, Tk> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for nfa_state in self.0.0.iter().take(self.0.0.len() - 1) {
-            write!(f, "{:?}, ", PrintableNFAState(nfa_state, self.1))?;
-        }
-        write!(
-            f,
-            "{:?}",
-            PrintableNFAState(self.0.0.iter().last().unwrap(), self.1)
-        )?;
-        Ok(())
-    }
-}
-
-impl From<BTreeSet<NFAState>> for DFAState {
-    fn from(value: BTreeSet<NFAState>) -> Self {
-        Self(value)
-    }
-}
-
-#[allow(unused)]
-#[derive(Clone, Debug)]
-pub struct DFA<Tk: Hash + Eq> {
-    start: DfaStateId,
-    end: DfaStateId,
-    transitions: HashMap<DfaStateId, HashMap<Symbol<Tk>, DfaStateId>>,
-    final_states: HashSet<DfaStateId>,
-    // from inadequate state to follow set of the reduce rule
-    conflict_resolver: HashMap<DfaStateId, HashSet<Tk>>,
-    state_to_id: HashMap<DFAState, DfaStateId>,
-    id_to_state: HashMap<DfaStateId, DFAState>,
-}
-
-pub struct Conflict {
-    // item for shift
-    pub shift: Item,
-    // rule number
-    pub reduce: usize,
-}
-
-impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
-    // from a NFA to DFA
-    pub fn build(grammar: &Grammar<Tk>) -> DFA<Tk> {
-        // 1. build NFA
-
-        // 1.1 build all the transitions
-        let mut transitions: HashMap<NFAState, HashMap<Symbol<Tk>, BTreeSet<NFAState>>> =
-            HashMap::new();
-        for (rule_num, rule) in grammar.rules.iter().enumerate() {
-            for (idx, symbol) in rule.right.iter().enumerate() {
-                let cur: NFAState = Item::new(rule_num, idx).into();
-                let next: NFAState = Item::new(rule_num, idx + 1).into();
-                transitions
-                    .entry(cur)
-                    .or_default()
-                    .entry(symbol.clone())
-                    .or_default()
-                    .insert(next);
-
-                // add epsilon transition if the symbol next to dot is non-terminal
-                if let Symbol::NonTerm(nonterm) = symbol {
-                    for (target_rule_num, _) in grammar.rules_of(nonterm) {
-                        let next: NFAState = Item::new(target_rule_num, 0).into();
-                        transitions
-                            .entry(cur)
-                            .or_default()
-                            .entry(Symbol::Epsilon)
-                            .or_default()
-                            .insert(next);
-                    }
-                }
-            }
-        }
-
-        // 1.2 now all the transitions for the NFA is built, let's calculate the epsilon-closures
-        let mut epsilon_closure_excluding_self: HashMap<NFAState, BTreeSet<NFAState>> =
-            HashMap::new();
-
-        let empty_set = BTreeSet::new();
-        for (rule_num, rule) in grammar.rules.iter().enumerate() {
-            for idx in 0..rule.right.len() {
-                let mut closure = BTreeSet::new();
-                let state = NFAState::from(Item::new(rule_num, idx));
-                let mut worklist = VecDeque::from([state]);
-                let mut visited = BTreeSet::new();
-                while !worklist.is_empty() {
-                    let cur = worklist.pop_front().unwrap();
-                    if !visited.insert(cur) {
-                        continue;
-                    }
-
-                    let epsilon_nexts = transitions
-                        .get(&cur)
-                        .and_then(|m| m.get(&Symbol::Epsilon))
-                        .unwrap_or(&empty_set);
-
-                    closure.extend(epsilon_nexts.iter());
-
-                    for next in epsilon_nexts {
-                        if let Some(calculated) = epsilon_closure_excluding_self.get(next) {
-                            closure.extend(calculated);
-                        } else {
-                            worklist.push_back(*next);
-                        }
-                    }
-                }
-
-                epsilon_closure_excluding_self.insert(state, closure);
-            }
-        }
-
-        // pretty print closure
-        // #[cfg(debug_assertions)]
-        // {
-        //     for (state, closure) in epsilon_closure_excluding_self
-        //         .iter()
-        //         .filter(|(_, v)| !v.is_empty())
-        //     {
-        //         println!("{:?} closure:", PrintableNFAState(state, grammar));
-        //         for st in closure {
-        //             println!("    {:?}", PrintableNFAState(st, grammar));
-        //         }
-        //     }
-        // }
-
-        // 2. NFA to DFA
-        let get_closure = |nfa_state: NFAState| {
-            let mut res = epsilon_closure_excluding_self
-                .get(&nfa_state)
-                .cloned()
-                .unwrap_or_default();
-            res.insert(nfa_state);
-            res
-        };
-
-        let mut state_id_counter = 0;
-        let mut id_to_state = HashMap::<DfaStateId, DFAState>::new();
-        let mut state_to_id = HashMap::<DFAState, DfaStateId>::new();
-        let mut get_or_new_state_id = |state: &DFAState| {
-            if let Some(id) = state_to_id.get(state) {
-                *id
-            } else {
-                let id = DfaStateId(state_id_counter);
-                state_id_counter += 1;
-                state_to_id.insert(state.clone(), id);
-                id_to_state.insert(id, state.clone());
-                id
-            }
-        };
-
-        let mut dfa_transitions: HashMap<DfaStateId, HashMap<Symbol<Tk>, DfaStateId>> =
-            HashMap::new();
-        let mut final_states = HashSet::new();
-
-        let start_state = DFAState::from(get_closure(Item::new(0, 0).into()));
-        let start = get_or_new_state_id(&start_state);
-
-        let mut visited = HashSet::new();
-        let mut worklist = VecDeque::from([start_state.clone()]);
-        while !worklist.is_empty() {
-            let cur = worklist.pop_front().unwrap();
-            let cur_id = get_or_new_state_id(&cur);
-            if !visited.insert(cur_id) {
-                continue;
-            }
-            // mark as final state
-            if cur.0.iter().any(|nfa_state| {
-                let Item { rule, idx } = nfa_state.0;
-                idx == grammar[rule].right.len()
-            }) {
-                final_states.insert(cur_id);
-            }
-
-            let mut all_actions = HashSet::new();
-
-            for nfa_state in &cur.0 {
-                let Item { rule, idx } = nfa_state.0;
-                if idx < grammar[rule].right.len() {
-                    all_actions.insert(grammar[rule].right[idx].clone());
-                }
-            }
-
-            for action in all_actions {
-                let mut next_dfa_state = BTreeSet::new();
-
-                for nfa_state in &cur.0 {
-                    let Item { rule, idx } = nfa_state.0;
-                    if idx < grammar[rule].right.len() && grammar[rule].right[idx] == action {
-                        let next_nfa_state = NFAState::from(Item::new(rule, idx + 1));
-                        next_dfa_state.extend(get_closure(next_nfa_state));
-                    }
-                }
-
-                let next_id = get_or_new_state_id(&DFAState(next_dfa_state.clone()));
-
-                dfa_transitions
-                    .entry(cur_id)
-                    .or_default()
-                    .insert(action, next_id);
-
-                worklist.push_back(next_dfa_state.into());
-            }
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            use std::collections::BTreeMap;
-
-            let print_order = BTreeMap::from_iter(state_to_id.iter().map(|(k, v)| (*v, k)));
-            for (id, state) in print_order {
-                tracing::trace!("DFA State #{:?}:", id);
-                tracing::trace!("{:?}", PrintableDFAState(state, grammar));
-            }
-        }
-
-        // mark all inadequate states
-        let inadequate_states: HashMap<DfaStateId, (HashSet<Item>, usize)> = final_states
-            .iter()
-            .filter_map(|&state_id| {
-                let state = &id_to_state[&state_id];
-                let reduce_rules: HashSet<usize> = state
-                    .0
-                    .iter()
-                    .filter_map(|nfa_state| {
-                        let Item { rule, idx } = nfa_state.0;
-                        if idx == grammar[rule].right.len() {
-                            Some(rule)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let shift_rules: HashSet<Item> = state
-                    .0
-                    .iter()
-                    .filter_map(|nfa_state| {
-                        let Item { rule, idx } = nfa_state.0;
-                        if idx < grammar[rule].right.len() {
-                            let next_sym = &grammar[rule].right[idx];
-                            if matches!(next_sym, Symbol::Term(_)) {
-                                Some(nfa_state.0)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<HashSet<_>>();
-                if reduce_rules.len() > 1 {
-                    panic!(
-                        "Reduce-reduce conflict detected at state:\n{:?}",
-                        PrintableDFAState(state, grammar)
-                    );
-                } else if shift_rules.len() > 1 {
-                    let shift_lookahead = shift_rules
-                        .iter()
-                        .map(|item| {
-                            let Item { rule, idx } = item;
-                            let symbol = &grammar.rules[*rule].right[*idx];
-                            symbol.name()
-                        })
-                        .collect::<HashSet<_>>();
-                    if shift_lookahead.len() != shift_rules.len() {
-                        panic!(
-                            "Shift-shift conflict cannot be resolved by lookahead at state:\n{:?}",
-                            PrintableDFAState(state, grammar)
-                        );
-                    }
-                    Some((
-                        state_id,
-                        (shift_rules, *reduce_rules.iter().next().unwrap()),
-                    ))
-                } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
-                    Some((
-                        state_id,
-                        (shift_rules, *reduce_rules.iter().next().unwrap()),
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect::<HashMap<_, _>>();
-
-        #[cfg(debug_assertions)]
-        {
-            use tracing::trace;
-            for (state_id, (shifts, reduce)) in &inadequate_states {
-                let state = &id_to_state[state_id];
-                trace!(
-                    "Inadequate DFA State #{:?}:",
-                    state_to_id.get(state).unwrap()
-                );
-                for nfa_state in &state.0 {
-                    trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
-                }
-                for shift in shifts {
-                    trace!(
-                        "    Shift on {:?}",
-                        PrintableNFAState(&NFAState(*shift), grammar)
-                    );
-                }
-
-                let rule = &grammar.rules[*reduce];
-                trace!("    Reduce by rule: {:?}", rule);
-                let follow = grammar.first_follow_set().follow();
-                let empty_set = HashSet::new();
-                let followers = follow
-                    .get(&(rule.left.clone().into()))
-                    .unwrap_or(&empty_set);
-                let shift_syms = shifts
-                    .iter()
-                    .map(|item| {
-                        let Item { rule, idx } = item;
-                        let symbol = &grammar.rules[*rule].right[*idx];
-                        symbol.clone().into_term()
-                    })
-                    .collect::<HashSet<_>>();
-                trace!(
-                    "follower set: {:?}, shift_sym: {:?}, resolved: {}",
-                    followers,
-                    shift_syms,
-                    followers
-                        .intersection(&shift_syms)
-                        .collect::<HashSet<_>>()
-                        .is_empty()
-                );
-                println!();
-            }
-        }
-
-        // now we know that lookahead could resolve the conflicts
-        // copy the follow set to DFA
-        let conflict_resolver = inadequate_states
-            .into_iter()
-            .map(|(state, (_shift, reduce))| {
-                let rule = &grammar.rules[reduce];
-                let first_follow = grammar.first_follow_set();
-                let empty_set = HashSet::new();
-                let followers = first_follow
-                    .follow()
-                    .get(&(rule.left.clone().into()))
-                    .unwrap_or(&empty_set);
-                (state, followers.clone())
-            })
-            .collect();
-
-        let end = *dfa_transitions[&start]
-            .get(&Symbol::NonTerm(grammar.start_sym.clone()))
-            .unwrap();
-
-        // let first_follow = grammar.first_follow_set();
-        DFA {
-            start,
-            end,
-            transitions: dfa_transitions,
-            final_states,
-            conflict_resolver,
-            state_to_id,
-            id_to_state,
-        }
-    }
-
-    pub fn build_lookahead_for_lalr(
-        &self,
-        grammar: &Grammar<Tk>,
-    ) -> HashMap<(DfaStateId, Item), HashSet<Tk>> {
-        let mut set: HashMap<(DfaStateId, Item), HashSet<Tk>> = HashMap::new();
-
-        let could_be_empty_nonterms = grammar.could_be_empty_nonterms();
-        let could_be_empty = |syms: &[Symbol<Tk>]| -> bool {
-            syms.iter().all(|sym| match sym {
-                Symbol::NonTerm(nt) => could_be_empty_nonterms.contains(nt),
-                Symbol::Epsilon => true,
-                Symbol::Term(_) => false,
-            })
-        };
-
-        let mut changed = true;
-        while changed {
-            changed = false;
-
-            for &cur_state in self.transitions.keys() {
-                let dfa_state = &self.id_to_state[&cur_state];
-                for nfa_state in &dfa_state.0 {
-                    let Item { rule, idx } = nfa_state.0;
-                    let grammar_rule = &grammar.rules[rule];
-                    if let Some(symbol) = grammar_rule.right.get(idx) {
-                        // rule 1, propagate inside the cur_state(closure)
-                        if matches!(symbol, Symbol::NonTerm(_)) {
-                            let rest = &grammar_rule.right[idx + 1..];
-                            let mut first_set = grammar.first_set_of_symbols(rest);
-                            // inside the state, the lookahead can only be propagated if the rest could be empty
-                            if could_be_empty(rest) {
-                                first_set.extend(
-                                    set.get(&(cur_state, nfa_state.0))
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                );
-                            }
-
-                            let expansions = dfa_state.0.iter().filter(|s| {
-                                let Item { rule: r, idx: i } = s.0;
-                                if i == 0 {
-                                    let left = &grammar.rules[r].left;
-                                    if let Symbol::NonTerm(nt) = &grammar_rule.right[idx] {
-                                        left == nt
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            });
-
-                            // rule 1, inside the cur_state
-                            for item in expansions {
-                                let key = (cur_state, item.0);
-                                let entry = set.entry(key).or_default();
-                                let before_size = entry.len();
-                                entry.extend(first_set.iter().cloned());
-                                if entry.len() > before_size {
-                                    changed = true;
-                                }
-                            }
-                        }
-
-                        // rule 2, from cur_state to next_state
-                        if let Some(next_state) = self.transitions[&cur_state].get(symbol)
-                            && let Some(lookahead_set) = set.get(&(cur_state, nfa_state.0)).cloned()
-                        {
-                            let next_item = Item::new(rule, idx + 1);
-                            let key = (*next_state, next_item);
-                            let entry = set.entry(key).or_default();
-                            let before_size = entry.len();
-                            entry.extend(lookahead_set.iter().cloned());
-                            if entry.len() > before_size {
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // filter empty lookahead entries
-        set.into_iter()
-            .filter(|(_, lookahead_set)| !lookahead_set.is_empty())
-            .collect()
-    }
-}
-
-pub struct TokenStream<Tk> {
-    tokens: Vec<Tk>,
-    position: usize,
-}
-
-impl<Tk> TokenStream<Tk> {
-    pub fn new(tokens: Vec<Tk>) -> Self {
-        Self {
-            tokens,
-            position: 0,
-        }
-    }
-
-    pub fn peek(&self) -> Option<&Tk> {
-        if self.position < self.tokens.len() {
-            Some(&self.tokens[self.position])
-        } else {
-            None
-        }
-    }
-
-    pub fn is_eof(&self) -> bool {
-        self.position >= self.tokens.len()
-    }
-}
-
-impl<Tk: Clone> Iterator for TokenStream<Tk> {
-    type Item = Tk;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.position < self.tokens.len() {
-            let tk = self.tokens[self.position].clone();
-            self.position += 1;
-            Some(tk)
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Clone)]
-pub struct PDA<'a, Tk: Hash + Eq, Value> {
+pub struct PDA<'a, Tk: Hash + Eq, Value, Actioner> {
     stack: Vec<DfaStateId>,
     value_stack: Vec<Value>,
     dfa: DFA<Tk>,
     grammar: Grammar<Tk>,
-    actions: &'a [fn(&mut Vec<Value>) -> Value],
+    actioner: Actioner,
+    actions: &'a [fn(&mut Actioner, &mut Vec<Value>) -> Value],
 }
 
-impl<'a, Tk, Value> PDA<'a, Tk, Value>
+impl<'a, Tk, Value, Actioner> PDA<'a, Tk, Value, Actioner>
 where
     Tk: Clone + TerminalKind + Hash + Eq + Debug,
     Value: From<Tk> + Debug,
@@ -595,21 +41,23 @@ where
     pub fn new(
         dfa: DFA<Tk>,
         grammar: Grammar<Tk>,
-        actions: &'a [fn(&mut Vec<Value>) -> Value],
+        actioner: Actioner,
+        actions: &'a [fn(&mut Actioner, &mut Vec<Value>) -> Value],
     ) -> Self {
         Self {
             stack: vec![dfa.start],
             value_stack: vec![],
             dfa,
             grammar,
+            actioner,
             actions,
         }
     }
 
-    pub fn process(&mut self, mut token_stream: TokenStream<Tk>) -> bool {
-        while !token_stream.is_eof() {
+    pub fn process<I: Iterator<Item = Tk>>(&mut self, mut token_stream: Peekable<I>) -> bool {
+        while !token_stream.peek().is_none() {
             let tk = token_stream.next().unwrap().clone();
-            if !self.process_one(tk, &token_stream) {
+            if !self.process_one(tk, &mut token_stream) {
                 break;
             }
         }
@@ -617,17 +65,21 @@ where
             println!(
                 "Stack state #{}: {:?}",
                 idx,
-                PrintableDFAState(&self.dfa.id_to_state[state], &self.grammar)
+                PrintableDFAState::new(&self.dfa.id_to_state[state], &self.grammar)
             );
         }
 
-        token_stream.is_eof()
+        token_stream.peek().is_none()
             && self.stack.len() == 2
             && self.stack[0] == self.dfa.start
             && self.stack[1] == self.dfa.end
     }
 
-    pub fn process_one(&mut self, tk: Tk, token_stream: &TokenStream<Tk>) -> bool {
+    pub fn process_one<I: Iterator<Item = Tk>>(
+        &mut self,
+        tk: Tk,
+        token_stream: &mut Peekable<I>,
+    ) -> bool {
         assert!(!self.stack.is_empty());
 
         // first try to shift
@@ -696,12 +148,12 @@ where
                 .unwrap_or_else(|| {
                     panic!(
                         "No goto state found! state:\n{:?}, symbol: {}",
-                        PrintableDFAState(top_state, &self.grammar),
+                        PrintableDFAState::new(top_state, &self.grammar),
                         rule.left.0.clone(),
                     )
                 });
             self.stack.push(*goto_state);
-            let result = action_fn(&mut self.value_stack);
+            let result = action_fn(&mut self.actioner, &mut self.value_stack);
             self.value_stack.push(result);
             println!("stack after reduce: {:?}", self.value_stack);
         }
@@ -716,6 +168,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::nfa_dfa::{NFAState, PrintableNFAState};
+    use crate::tests::parse_lines;
 
     #[derive(Clone)]
     pub struct SimplyPDA<Tk: Hash + Eq> {
@@ -736,10 +191,10 @@ mod tests {
             }
         }
 
-        pub fn process(&mut self, mut token_stream: TokenStream<Tk>) -> bool {
-            while !token_stream.is_eof() {
+        pub fn process<I: Iterator<Item = Tk>>(&mut self, mut token_stream: Peekable<I>) -> bool {
+            while !token_stream.peek().is_none() {
                 let tk = token_stream.next().unwrap().clone();
-                if !self.process_one(tk, &token_stream) {
+                if !self.process_one(tk, &mut token_stream) {
                     break;
                 }
             }
@@ -747,17 +202,21 @@ mod tests {
                 println!(
                     "Stack state #{}: {:?}",
                     idx,
-                    PrintableDFAState(&self.dfa.id_to_state[state], &self.grammar)
+                    PrintableDFAState::new(&self.dfa.id_to_state[state], &self.grammar)
                 );
             }
 
-            return token_stream.is_eof()
+            return token_stream.peek().is_none()
                 && self.stack.len() == 2
                 && self.stack[0] == self.dfa.start
                 && self.stack[1] == self.dfa.end;
         }
 
-        pub fn process_one(&mut self, tk: Tk, token_stream: &TokenStream<Tk>) -> bool {
+        pub fn process_one<I: Iterator<Item = Tk>>(
+            &mut self,
+            tk: Tk,
+            token_stream: &mut Peekable<I>,
+        ) -> bool {
             assert!(!self.stack.is_empty());
 
             // first try to shift
@@ -826,7 +285,7 @@ mod tests {
                     .get(&Symbol::NonTerm(rule.left.clone()))
                     .expect(&format!(
                         "No goto state found! state:\n{:?}, symbol: {}",
-                        PrintableDFAState(top_state, &self.grammar),
+                        PrintableDFAState::new(top_state, &self.grammar),
                         rule.left.0.clone(),
                     ));
                 self.stack.push(goto_state.clone());
@@ -834,7 +293,6 @@ mod tests {
             true
         }
     }
-    use super::*;
 
     static INIT: std::sync::Once = std::sync::Once::new();
     fn setup() {
@@ -871,17 +329,8 @@ mod tests {
         let dfa = DFA::build(&grammar);
         let pda = SimplyPDA::new(dfa, grammar);
 
-        // let ts = TokenStream::new(vec![
-        //     Terminal("a".into()),
-        //     Terminal("b".into()),
-        //     Terminal("c".into()),
-        // ]);
-
-        // let res = pda.clone().process(ts);
-        // println!("Result: {}", res);
-
         // a b b b b b c c d
-        let ts = TokenStream::new(vec![
+        let ts = vec![
             Terminal("a".into()),
             Terminal("b".into()),
             Terminal("b".into()),
@@ -891,10 +340,10 @@ mod tests {
             Terminal("c".into()),
             Terminal("c".into()),
             Terminal("d".into()),
-        ]);
+        ];
 
-        let res = pda.clone().process(ts);
-        println!("Result: {}", res);
+        let res = pda.clone().process(ts.into_iter().peekable());
+        assert!(res);
     }
 
     #[allow(unused)]
@@ -968,17 +417,18 @@ mod tests {
         let dfa = DFA::build(&grammar);
         let pda = SimplyPDA::new(dfa, grammar);
 
-        let ts = TokenStream::new(vec![
+        let ts = vec![
             ExprToken::Identifier("a".into()),
             ExprToken::Plus,
             ExprToken::Identifier("b".into()),
             ExprToken::Star,
             ExprToken::Identifier("c".into()),
-        ]);
-        let res = pda.clone().process(ts);
-        println!("Result: {}", res);
+        ];
+        let res = pda.clone().process(ts.into_iter().peekable());
+        assert!(res);
     }
 
+    #[should_panic]
     #[test]
     fn test_slr() {
         // S → a E c
@@ -1001,12 +451,12 @@ mod tests {
         let dfa = DFA::build(&grammar);
         let pda = SimplyPDA::new(dfa, grammar);
 
-        let ts = TokenStream::new(vec![
+        let ts = vec![
             Terminal("a".into()),
             Terminal("e".into()),
             Terminal("d".into()),
-        ]);
-        let res = pda.clone().process(ts);
+        ];
+        let res = pda.clone().process(ts.into_iter().peekable());
         println!("Result: {}", res);
     }
 
@@ -1022,8 +472,8 @@ mod tests {
         for ((state_id, item), lookahead_set) in &lookahead {
             println!(
                 "State {:?}, Item {:?}, Lookahead: {:?}",
-                PrintableDFAState(&dfa.id_to_state[state_id], &grammar),
-                PrintableNFAState(&NFAState(item.clone()), &grammar),
+                PrintableDFAState::new(&dfa.id_to_state[state_id], &grammar),
+                PrintableNFAState::new(&NFAState(item.clone()), &grammar),
                 lookahead_set
             );
         }
@@ -1041,8 +491,8 @@ mod tests {
         for ((state_id, item), lookahead_set) in &lookahead {
             println!(
                 "State {:?}, Item {:?}, Lookahead: {:?}",
-                PrintableDFAState(&dfa.id_to_state[state_id], &grammar),
-                PrintableNFAState(&NFAState(item.clone()), &grammar),
+                PrintableDFAState::new(&dfa.id_to_state[state_id], &grammar),
+                PrintableNFAState::new(&NFAState(item.clone()), &grammar),
                 lookahead_set
             );
         }

@@ -1,27 +1,83 @@
 use crate::generator::*;
+use crate::grammar::*;
+use std::collections::HashSet;
+use std::hash::Hash;
+
+pub fn parse_lines<S, T>(start_sym: &str, raw_rules: Vec<S>) -> Grammar<T>
+where
+    S: AsRef<str>,
+    T: for<'a> From<&'a str> + Hash + Eq + std::fmt::Debug + Clone + TerminalKind,
+{
+    let start_sym = NonTerminal::new(start_sym);
+    let pseudo_start_sym = NonTerminal::new("S'");
+
+    let nonterms = raw_rules
+        .iter()
+        .map(|s| {
+            let line = s.as_ref();
+            let mut parts = line.split("->");
+            parts.next().unwrap().trim()
+        })
+        .collect::<HashSet<_>>();
+
+    let mut rules = vec![Rule {
+        left: pseudo_start_sym.clone(),
+        right: vec![Symbol::NonTerm(start_sym.clone())],
+    }];
+
+    rules.extend(raw_rules.iter().map(|line| {
+        let line = line.as_ref();
+        let mut parts = line.split("->");
+        let left = parts.next().unwrap().trim();
+        let right = parts.next().unwrap().trim();
+
+        let left_nt = NonTerminal::new(left);
+        let right_syms = if right == "ε" {
+            vec![]
+        } else {
+            right
+                .split_whitespace()
+                .map(|s| {
+                    if nonterms.contains(s) {
+                        Symbol::NonTerm(NonTerminal::new(s))
+                    } else {
+                        Symbol::Term(T::from(s))
+                    }
+                })
+                .collect()
+        };
+
+        Rule {
+            left: left_nt,
+            right: right_syms,
+        }
+    }));
+
+    Grammar::new(pseudo_start_sym, start_sym, rules)
+}
 
 #[test]
-fn t1() {
+fn test_hardcode_expr_parser_generator() {
     let defs = vec![
         //  pub Expr: Box<Expr> = {
-        //     Expr ExprOp Factor => Box::new(Expr::Op(<>)), // expr -> expr + factor, expr -> expr - factor
-        //     Factor                                        // expr -> factor
+        //     Expr ExprOp Factor => `rule1`,   // expr -> expr + factor, expr -> expr - factor
+        //     Factor                           // expr -> factor
         //  };
-        NonTerminalRules {
+        GenRuleGroup {
             name: "Expr".to_string(),
             return_type: "Box<Expr>".to_string(),
             rules: vec![
-                // Rule 1: Expr ExprOp Factor => Box::new(Expr::Op(<>))
-                Rule {
+                // Rule 1: Expr ExprOp Factor => `rule1`
+                GenRule {
                     production: vec![
                         "Expr".to_string(),
                         "ExprOp".to_string(),
                         "Factor".to_string(),
                     ],
-                    action: "Box::new(Expr::Op(arg1, arg2, arg3))".to_string(),
+                    action: "`rule1`".to_string(),
                 },
                 // Rule 2: Factor
-                Rule {
+                GenRule {
                     production: vec!["Factor".to_string()],
                     action: "arg1".to_string(),
                 },
@@ -31,12 +87,12 @@ fn t1() {
         //     Token::Plus => Opcode::Add,      // expr_op -> +
         //     Token::Minus => Opcode::Sub,     // expr_op -> -
         // };
-        NonTerminalRules {
+        GenRuleGroup {
             name: "ExprOp".to_string(),
             return_type: "Opcode".to_string(),
             rules: vec![
                 // "+" => Opcode::Add
-                Rule {
+                GenRule {
                     production: vec!["Token::Plus".to_string()],
                     action: "Opcode::Add".to_string(),
                 },
@@ -46,12 +102,12 @@ fn t1() {
         //     Factor FactorOp Term => Box::new(Expr::Op(<>)),  // factor -> factor * term, factor -> factor / term
         //     Term,                                            // factor -> term
         // };
-        NonTerminalRules {
+        GenRuleGroup {
             name: "Factor".to_string(),
             return_type: "Box<Expr>".to_string(),
             rules: vec![
                 // Factor FactorOp Term => Box::new(Expr::Op(<>))
-                Rule {
+                GenRule {
                     production: vec![
                         "Factor".to_string(),
                         "FactorOp".to_string(),
@@ -60,7 +116,7 @@ fn t1() {
                     action: "Box::new(Expr::Op(arg1, arg2, arg3))".to_string(),
                 },
                 // Term
-                Rule {
+                GenRule {
                     production: vec!["Term".to_string()],
                     action: "arg1".to_string(),
                 },
@@ -70,12 +126,12 @@ fn t1() {
         //     Token::Star => Opcode::Mul,       // factor_op -> *
         //     Token::Device => Opcode::Div,     // factor_op -> /
         // };
-        NonTerminalRules {
+        GenRuleGroup {
             name: "FactorOp".to_string(),
             return_type: "Opcode".to_string(),
             rules: vec![
                 // "*" => Opcode::Mul
-                Rule {
+                GenRule {
                     production: vec!["Token::Star".to_string()],
                     action: "Opcode::Mul".to_string(),
                 },
@@ -85,15 +141,15 @@ fn t1() {
         //     Token::Identifier => Box::new(Expr::Identifier(<>)),   // term -> identifier
         //     Token::LParen Expr Token::RParen => Expr               // term -> ( expr )
         // };
-        NonTerminalRules {
+        GenRuleGroup {
             name: "Term".to_string(),
             return_type: "Box<Expr>".to_string(),
             rules: vec![
-                Rule {
+                GenRule {
                     production: vec!["Num".to_string()],
                     action: "Box::new(Expr::Identifier(arg1.into()))".to_string(),
                 },
-                Rule {
+                GenRule {
                     production: vec!["(".to_string(), "Expr".to_string(), ")".to_string()],
                     action: "arg2".to_string(),
                 },
@@ -193,6 +249,17 @@ impl From<Token> for Value {
         Value::Token(token)
     }
 }
+
+pub struct SemanticAction;
+
+impl SemanticAction {
+    fn rule1(&mut self, stack_top: (Box<Expr>, Opcode, Box<Expr>)) -> Box<Expr> {
+        let (arg1, arg2, arg3) = stack_top;
+        println!("Building Expr Op Node: {:?} {:?} {:?}", arg1, arg2, arg3);
+        Box::new(Expr::Op(arg1, arg2, arg3))
+    }
+}
+
 "#;
 
     let usage = r#"
@@ -200,6 +267,8 @@ impl From<Token> for Value {
 #[test]
 fn test_expr() {
     use crate::pda::*;
+    use crate::tests::*;
+    use crate::nfa_dfa::DFA;
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
         let _ = tracing_subscriber::fmt()
@@ -208,7 +277,7 @@ fn test_expr() {
             .try_init();
     });
 
-    let grammar = crate::grammar::parse_lines::<_, Token>(
+    let grammar = parse_lines::<_, Token>(
         "Expr",
         vec![
             "Expr -> Expr ExprOp Factor",
@@ -227,8 +296,9 @@ fn test_expr() {
     }
 
     let dfa = DFA::build(&grammar);
-    let mut pda = PDA::new(dfa, grammar, RULE_TABLE);
-    let ts = TokenStream::new(vec![
+    let actioner = SemanticAction;
+    let mut pda = PDA::new(dfa, grammar, actioner, RULE_TABLE);
+    let ts = vec![
         Token::Identifier("x".to_string()),
         Token::Plus,
         Token::Identifier("y".to_string()),
@@ -238,9 +308,9 @@ fn test_expr() {
         Token::Plus,
         Token::Identifier("w".to_string()),
         Token::RParen,
-    ]);
+    ];
 
-    let res = pda.process(ts);
+    let res = pda.process(ts.into_iter().peekable());
     let top = pda.final_value();
     println!("Result: {}", res);
     println!("AST: {:?}", top.into_expr());
