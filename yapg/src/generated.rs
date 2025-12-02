@@ -101,14 +101,32 @@ impl SemanticAction {
 
 #[derive(Debug)]
 enum Value {
+    Term(Box<Expr>),
+    Factor(Box<Expr>),
+    ExprOp(Opcode),
     FactorOp(Opcode),
     Expr(Box<Expr>),
-    Factor(Box<Expr>),
-    Term(Box<Expr>),
-    ExprOp(Opcode),
     Token(Token),
 }
 impl Value {
+    fn into_term(self) -> Box<Expr> {
+        match self {
+            Value::Term(v) => v,
+            _ => panic!("expected Term node"),
+        }
+    }
+    fn into_factor(self) -> Box<Expr> {
+        match self {
+            Value::Factor(v) => v,
+            _ => panic!("expected Factor node"),
+        }
+    }
+    fn into_exprop(self) -> Opcode {
+        match self {
+            Value::ExprOp(v) => v,
+            _ => panic!("expected ExprOp node"),
+        }
+    }
     fn into_factorop(self) -> Opcode {
         match self {
             Value::FactorOp(v) => v,
@@ -119,24 +137,6 @@ impl Value {
         match self {
             Value::Expr(v) => v,
             _ => panic!("expected Expr node"),
-        }
-    }
-    fn into_factor(self) -> Box<Expr> {
-        match self {
-            Value::Factor(v) => v,
-            _ => panic!("expected Factor node"),
-        }
-    }
-    fn into_term(self) -> Box<Expr> {
-        match self {
-            Value::Term(v) => v,
-            _ => panic!("expected Term node"),
-        }
-    }
-    fn into_exprop(self) -> Opcode {
-        match self {
-            Value::ExprOp(v) => v,
-            _ => panic!("expected ExprOp node"),
         }
     }
     fn into_token(self) -> Token {

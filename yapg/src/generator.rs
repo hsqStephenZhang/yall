@@ -19,9 +19,37 @@ pub struct GenRuleGroup {
 }
 
 #[derive(Debug, Clone)]
+pub enum ActionKind {
+    Code(String),
+    Sema(String),
+}
+
+impl From<String> for ActionKind {
+    fn from(action: String) -> Self {
+        ActionKind::Code(action)
+    }
+}
+
+impl std::fmt::Display for ActionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActionKind::Code(code) => write!(f, "{}", code),
+            ActionKind::Sema(method) => write!(f, "`{}`", method),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GenRule {
     pub production: Vec<String>,
-    pub action: String,
+    pub action: ActionKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenGrammar {
+    pub rule_groups: Vec<GenRuleGroup>,
+    pub semantic_action_type: Option<String>,
+    pub extern_code: Option<String>,
 }
 
 /// generation strategy:
@@ -155,38 +183,40 @@ impl Generator {
                     });
                 }
 
-                if !rule.action.starts_with("`") {
-                    let user_action: TokenStream =
-                        syn::parse_str(&rule.action).expect("Invalid action code");
-                    funcs.push(quote! {
-                        fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
-                            #(#pops)*
-                            let result = { #user_action };
-                            Value::#result_variant(result)
-                        }
-                    });
-                    continue;
-                }
+                match &rule.action {
+                    ActionKind::Code(code) => {
+                        let user_action: TokenStream =
+                            syn::parse_str(&code).expect("Invalid action code");
+                        funcs.push(quote! {
+                            fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+                                #(#pops)*
+                                let result = { #user_action };
+                                Value::#result_variant(result)
+                            }
+                        });
+                    }
+                    ActionKind::Sema(method) => {
+                        let arg_idents: Vec<proc_macro2::Ident> = (1..=rule.production.len())
+                            .map(|i| format_ident!("arg{}", i))
+                            .collect();
+                        let args = if arg_idents.len() == 1 {
+                            let only_arg = &arg_idents[0];
+                            quote! { #only_arg }
+                        } else {
+                            quote! { ( #(#arg_idents),* ) }
+                        };
+                        let method = format_ident!("{}", method);
 
-                let user_action: TokenStream =
-                    syn::parse_str(rule.action.trim_matches('`')).expect("Invalid action code");
-                let arg_idents: Vec<proc_macro2::Ident> =
-                    (1..=rule.production.len()).map(|i| format_ident!("arg{}", i)).collect();
-                let args = if arg_idents.len() == 1 {
-                    let only_arg = &arg_idents[0];
-                    quote! { #only_arg }
-                } else {
-                    quote! { ( #(#arg_idents),* ) }
-                };
-
-                funcs.push(quote! {
+                        funcs.push(quote! {
                     fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
                         #(#pops)*
                         let args = #args;
-                        let result = SemanticAction::#user_action(action, args);
+                        let result = SemanticAction::#method(action, args);
                         Value::#result_variant(result)
                     }
                 });
+                    }
+                }
             }
         }
 

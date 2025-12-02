@@ -72,10 +72,13 @@ fn test_hardcode_expr_parser_generator() {
                         "ExprOp".to_string(),
                         "Factor".to_string(),
                     ],
-                    action: "`rule1`".to_string(),
+                    action: ActionKind::Sema("rule1".to_string()),
                 },
                 // Rule 2: Factor
-                GenRule { production: vec!["Factor".to_string()], action: "arg1".to_string() },
+                GenRule {
+                    production: vec!["Factor".to_string()],
+                    action: "arg1".to_string().into(),
+                },
             ],
         },
         // ExprOp: Opcode = {
@@ -89,7 +92,7 @@ fn test_hardcode_expr_parser_generator() {
                 // "+" => Opcode::Add
                 GenRule {
                     production: vec!["Token::Plus".to_string()],
-                    action: "Opcode::Add".to_string(),
+                    action: "Opcode::Add".to_string().into(),
                 },
             ],
         },
@@ -108,10 +111,10 @@ fn test_hardcode_expr_parser_generator() {
                         "FactorOp".to_string(),
                         "Term".to_string(),
                     ],
-                    action: "Box::new(Expr::Op(arg1, arg2, arg3))".to_string(),
+                    action: "Box::new(Expr::Op(arg1, arg2, arg3))".to_string().into(),
                 },
                 // Term
-                GenRule { production: vec!["Term".to_string()], action: "arg1".to_string() },
+                GenRule { production: vec!["Term".to_string()], action: "arg1".to_string().into() },
             ],
         },
         // FactorOp: Opcode = {
@@ -125,7 +128,7 @@ fn test_hardcode_expr_parser_generator() {
                 // "*" => Opcode::Mul
                 GenRule {
                     production: vec!["Token::Star".to_string()],
-                    action: "Opcode::Mul".to_string(),
+                    action: "Opcode::Mul".to_string().into(),
                 },
             ],
         },
@@ -139,11 +142,11 @@ fn test_hardcode_expr_parser_generator() {
             rules: vec![
                 GenRule {
                     production: vec!["Num".to_string()],
-                    action: "Box::new(Expr::Identifier(arg1.into()))".to_string(),
+                    action: "Box::new(Expr::Identifier(arg1.into()))".to_string().into(),
                 },
                 GenRule {
                     production: vec!["(".to_string(), "Expr".to_string(), ")".to_string()],
-                    action: "arg2".to_string(),
+                    action: "arg2".to_string().into(),
                 },
             ],
         },
@@ -189,7 +192,6 @@ impl From<Token> for Identifier {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Eq)]
 enum Token {
