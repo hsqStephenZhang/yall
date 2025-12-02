@@ -1,0 +1,29 @@
+extern {
+    use crate::ast::*;
+};
+
+// define SemanticAction
+SemanticAction = SemanticAction;
+
+Expr: Box<Expr> = {
+    Expr ExprOp Factor => `rule1`,
+    Factor             => arg1
+};
+
+ExprOp: Opcode = {
+    Token::Plus  => Opcode::Add,
+};
+
+Factor: Box<Expr> = {
+    Factor FactorOp Term => Box::new(Expr::Op(arg1, arg2, arg3)),
+    Term                 => arg1,
+};
+
+FactorOp: Opcode = {
+    Token::Star => Opcode::Mul,       // factor_op -> *
+};
+        
+Term: Box<Expr> = {
+    Token::Identifier => Box::new(Expr::Identifier(arg1.into())),
+    Token::LParen Expr Token::RParen => arg2
+};

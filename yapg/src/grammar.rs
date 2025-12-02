@@ -196,13 +196,6 @@ impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
     }
 }
 
-#[cfg(test)]
-pub enum CompareOption {
-    First,
-    Follow,
-    Both,
-}
-
 impl<Tk: Clone + TerminalKind + Eq + Hash + Debug> Grammar<Tk> {
     pub fn rules_of(&self, non_term: &NonTerminal) -> impl Iterator<Item = (usize, &Rule<Tk>)> {
         self.rules.iter().enumerate().filter(|(_, rule)| rule.left == *non_term)

@@ -83,7 +83,6 @@ fn test_hardcode_expr_parser_generator() {
         },
         // ExprOp: Opcode = {
         //     Token::Plus => Opcode::Add,      // expr_op -> +
-        //     Token::Minus => Opcode::Sub,     // expr_op -> -
         // };
         GenRuleGroup {
             name: "ExprOp".to_string(),
@@ -119,7 +118,6 @@ fn test_hardcode_expr_parser_generator() {
         },
         // FactorOp: Opcode = {
         //     Token::Star => Opcode::Mul,       // factor_op -> *
-        //     Token::Device => Opcode::Div,     // factor_op -> /
         // };
         GenRuleGroup {
             name: "FactorOp".to_string(),
@@ -311,8 +309,12 @@ fn test_expr() {
 }
 "#;
 
-    let generator = Generator::new(&defs);
+    let generator = Generator::new(GenGrammar {
+        rule_groups: defs.clone(),
+        semantic_action_type: Some("SemanticAction".to_string()),
+        extern_code: None,
+    });
     let generated_code =
-        PRE_DEFINED.to_string() + "\n" + &generator.generate(&defs).to_string() + usage;
+        PRE_DEFINED.to_string() + "\n" + &generator.generate().to_string() + usage;
     std::fs::write("src/generated.rs", generated_code).unwrap();
 }

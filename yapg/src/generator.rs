@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::grammar_parser::Parser;
+
 /// a group of rules for a non-terminal
 /// like
 /// ```yall grammar
@@ -52,32 +54,54 @@ pub struct GenGrammar {
     pub extern_code: Option<String>,
 }
 
+impl GenGrammar {
+    // verify the integrity of the grammar
+    pub fn verify(&self) -> bool {
+        if self.semantic_action_type.is_none() {
+            for group in &self.rule_groups {
+                for rule in &group.rules {
+                    if let ActionKind::Sema(_) = rule.action {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
 /// generation strategy:
 /// 1. collect all non-terminals and their return types
 /// 2. create a `enum Value` that can represent all possible return types and str token
 /// 3. for each rule, generate a function that pops arguments from a stack and pushes the result
 /// 4. create a table that maps rule id to action function
 pub struct Generator {
+    grammar: GenGrammar,
     symbol_type_map: HashMap<String, String>,
 }
 
 impl Generator {
-    pub fn new(defs: &[GenRuleGroup]) -> Self {
+    pub fn new(grammar: GenGrammar) -> Self {
+        assert!(
+            grammar.verify(),
+            "Grammar uses semantic actions but no SemanticAction type is defined"
+        );
         let mut symbol_type_map = HashMap::new();
-
-        for nt in defs {
-            symbol_type_map.insert(nt.name.clone(), nt.return_type.clone());
+        for def in &grammar.rule_groups {
+            symbol_type_map.insert(def.name.clone(), def.return_type.clone());
         }
-
-        Self { symbol_type_map }
+        Self { grammar, symbol_type_map }
     }
 
-    pub fn generate(&self, defs: &[GenRuleGroup]) -> TokenStream {
+    pub fn generate(self) -> TokenStream {
+        let extern_code = self.grammar.extern_code.as_ref().map(String::as_str).unwrap_or("");
+        let extern_code: syn::File = syn::parse_str(extern_code).expect("Invalid extern code");
         let value_enum = self.gen_value_enum();
-        let action_fns = self.gen_action_fns(defs);
-        let table = self.gen_table(defs);
+        let action_fns = self.gen_action_fns();
+        let table = self.gen_table();
 
         quote! {
+            #extern_code
             #value_enum
             #action_fns
             #table
@@ -145,7 +169,8 @@ impl Generator {
     ///     Value::Expr(result)
     /// }
     /// ```
-    fn gen_action_fns(&self, defs: &[GenRuleGroup]) -> TokenStream {
+    fn gen_action_fns(&self) -> TokenStream {
+        let defs = &self.grammar.rule_groups;
         let mut funcs = Vec::new();
 
         let fn0_name = format_ident!("rule_{}", 0usize);
@@ -225,7 +250,8 @@ impl Generator {
         }
     }
 
-    fn gen_table(&self, defs: &[GenRuleGroup]) -> TokenStream {
+    fn gen_table(&self) -> TokenStream {
+        let defs = &self.grammar.rule_groups;
         let mut rows = Vec::new();
         let fn_name = format_ident!("rule_{}", 0usize);
         rows.push(quote! {
@@ -250,5 +276,36 @@ impl Generator {
                 #(#rows),*
             ];
         }
+    }
+}
+
+pub struct Configuration {
+    grammar_files: Vec<String>,
+}
+
+impl Configuration {
+    pub fn new() -> Self {
+        Self { grammar_files: Vec::new() }
+    }
+
+    pub fn add_grammar_file(mut self, path: impl Into<String>) -> Self {
+        self.grammar_files.push(path.into());
+        self
+    }
+
+    pub fn build(self) -> std::io::Result<()> {
+        let out_path = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+        std::fs::create_dir_all(&out_path).expect("Failed to create output directory");
+        for file in &self.grammar_files {
+            tracing::trace!("Processing grammar file: {}", file);
+            let content = std::fs::read_to_string(file)
+                .unwrap_or_else(|e| panic!("Failed to read grammar file {}: {}", file, e));
+            let grammar = Parser::new(&content).parse_grammar();
+            let generator = Generator::new(grammar);
+            let generated_code = generator.generate();
+            let out_path = format!("{}.rs", file.trim_end_matches(".yapg"));
+            let _ = std::fs::write(&out_path, generated_code.to_string())?;
+        }
+        Ok(())
     }
 }

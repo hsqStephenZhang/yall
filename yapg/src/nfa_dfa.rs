@@ -3,6 +3,9 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+
 use crate::grammar::*;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -478,4 +481,102 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         // filter empty lookahead entries
         set.into_iter().filter(|(_, lookahead_set)| !lookahead_set.is_empty()).collect()
     }
+
+    // should generate code like:
+    pub fn generate_rust_code(&self, grammar: &Grammar<Tk>) -> TokenStream {
+        let state_num = self.state_to_id.len();
+        let start_state = self.start.0;
+        let end_state = self.end.0;
+        let final_states =
+            self.final_states.iter().map(|DfaStateId(id)| quote! { #id }).collect::<Vec<_>>();
+
+        let start_end_tks = quote! {
+            const FINAL_STATES_SET: phf::Set<usize> = phf::phf_set! { #(#final_states),* } ;
+            const STATES_NUM: usize = #state_num ;
+            const START_STATE: usize = #start_state ;
+            const END_STATE: usize = #end_state ;
+        };
+
+        let transition_maps = self
+            .transitions
+            .iter()
+            .map(|(DfaStateId(state_id), trans_map)| {
+                let entries = trans_map
+                    .iter()
+                    .map(|(symbol, DfaStateId(target_id))| {
+                        let sym_id = match symbol {
+                            Symbol::Term(t) => t.id(),
+                            Symbol::NonTerm(nt) => nt.0.as_str(),
+                            Symbol::Epsilon => {
+                                panic!("Epsilon found in DFA transition, which is invalid")
+                            }
+                        };
+                        quote! { #sym_id => #target_id }
+                    })
+                    .collect::<Vec<_>>();
+                let name = format_ident!("TRANSITION{}", state_id);
+                quote! {
+                    static #name: phf::Map<&'static str, usize> = phf::phf_map! { #(#entries),* } ;
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let transitions_array = (0..state_num)
+            .map(|state_id| {
+                let name = format_ident!("TRANSITION{}", state_id);
+                quote! { & #name }
+            })
+            .collect::<Vec<_>>();
+
+        let transition = quote! {
+            static TRANSITIONS: &[&phf::Map<&'static str, usize>] = &[ #(#transitions_array),* ] ;
+        };
+
+        let reduce_table = (0..state_num)
+            .map(|state_id| {
+                if let Some(reduce_rule) =
+                    self.id_to_state[&DfaStateId(state_id)].reduce_rule(grammar)
+                {
+                    quote! { Some(#reduce_rule) }
+                } else {
+                    quote! { None }
+                }
+            })
+            .collect::<Vec<_>>();
+        let reduce_table = quote! {
+            const REDUCE_RULE: &[Option<usize>] = &[ #(#reduce_table),* ] ;
+        };
+
+        quote! {
+            #start_end_tks
+
+            #(#transition_maps)*
+
+            #transition
+            
+            #reduce_table
+        }
+    }
 }
+
+// const STATES_NUM: usize = 10;
+
+// const FINAL_STATES_SET: phf::Set<usize> = phf::phf_set! {};
+
+// const START_STATE: usize = 0;
+// const END_STATE: usize = 9;
+
+// static TRANSITION1: phf::Map<&'static str, usize> = phf::phf_map! {
+//     "+" => 0,
+//     "-" => 1,
+//     "*" => 2,
+//     "/" => 3,
+// };
+
+// static TRANSITION2: phf::Map<&'static str, usize> = phf::phf_map! {};
+
+// // from each state id to its transition map
+// const TRANSITIONS: &[&phf::Map<&'static str, usize>] = &[&TRANSITION1, &TRANSITION2];
+
+// // reduce rule for each state,
+// const REDUCE_RULE: &[Option<usize>] = &[None, Some(1)];
