@@ -47,7 +47,7 @@ where
     }
 
     pub fn process<I: Iterator<Item = Tk>>(&mut self, mut token_stream: Peekable<I>) -> bool {
-        while !token_stream.peek().is_none() {
+        while token_stream.peek().is_some() {
             let tk = token_stream.next().unwrap().clone();
             if !self.process_one(tk, &mut token_stream) {
                 break;
@@ -176,7 +176,7 @@ mod tests {
         }
 
         pub fn process<I: Iterator<Item = Tk>>(&mut self, mut token_stream: Peekable<I>) -> bool {
-            while !token_stream.peek().is_none() {
+            while token_stream.peek().is_some() {
                 let tk = token_stream.next().unwrap().clone();
                 if !self.process_one(tk, &mut token_stream) {
                     break;
@@ -225,7 +225,7 @@ mod tests {
                 // in final state, need to reduce
                 let rule_to_apply = current_state
                     .reduce_rule(&self.grammar)
-                    .expect("should exist only one reduce rule");
+                    .expect("should exist only oane reduce rule");
 
                 // resolve conflict by looking ahead
                 if let Some(follow_set) = self.dfa.conflict_resolver.get(current_state_id) {
