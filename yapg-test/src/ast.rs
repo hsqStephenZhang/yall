@@ -73,18 +73,6 @@ impl From<&str> for Token {
     }
 }
 
-impl TerminalKind for Token {
-    fn id(&self) -> &str {
-        match self {
-            Token::LParen => "(",
-            Token::RParen => ")",
-            Token::Plus => "+",
-            Token::Star => "*",
-            Token::Identifier(_) => "identifier",
-        }
-    }
-}
-
 pub struct SemanticAction;
 
 impl SemanticAction {

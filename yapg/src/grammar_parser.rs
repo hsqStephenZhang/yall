@@ -1,6 +1,6 @@
 use logos::{Lexer, Logos};
 
-use crate::generator::{GenGrammar, GenRule, GenRuleGroup};
+use crate::generator::{GenGrammar, GenRule, GenRuleGroup, TokenKindDef};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\n\f]+")]
@@ -15,6 +15,15 @@ pub enum Token {
     #[token("}")]
     RBrace,
 
+    #[token("(")]
+    LParen,
+
+    #[token(")")]
+    RParen,
+
+    #[token("..")]
+    DoubleDot,
+
     #[token(",")]
     Comma,
 
@@ -23,6 +32,15 @@ pub enum Token {
 
     #[token("::")]
     ColonColon,
+
+    #[token("tokenkind")]
+    KwTokenKind,
+
+    #[regex(r#""(?:[^"\\]|\\.)*""#, |lex| {
+        let s = lex.slice();
+        s[1..s.len()-1].to_string() 
+    })]
+    StringLiteral(String),
 
     #[token("extern", extract_extern_block)]
     ExternBlock(String),
@@ -116,7 +134,9 @@ fn extract_extern_block(lex: &mut Lexer<Token>) -> String {
 }
 
 fn extract_semantic_action(lex: &mut Lexer<Token>) -> String {
-    extract_balanced(lex, &[';'])
+    let s = extract_balanced(lex, &[';']);
+    assert!(s.starts_with("="));
+    s.trim()[1..].trim().to_string()
 }
 
 pub struct Parser<'source> {
@@ -154,6 +174,8 @@ impl<'source> Parser<'source> {
 
     pub fn parse_grammar(&mut self) -> GenGrammar {
         let mut rule_groups = Vec::new();
+        let mut token_kinds = Vec::new();
+        let mut token_ty = String::new();
         let mut semantic_action_type = None;
         let mut extern_code = None;
 
@@ -176,10 +198,13 @@ impl<'source> Parser<'source> {
                     semantic_action_type = self.advance().unwrap().as_semantic_action();
                     self.expect(Token::Semi);
                 }
+                Token::KwTokenKind => {
+                    (token_ty, token_kinds) = self.parse_token_kinds();
+                }
                 _ => panic!("Unexpected token at top level: {:?}", token),
             }
         }
-        GenGrammar { rule_groups, semantic_action_type, extern_code }
+        GenGrammar::new(rule_groups, token_ty, token_kinds, semantic_action_type, extern_code)
     }
 
     // Name : Type = { Rules }
@@ -263,6 +288,62 @@ impl<'source> Parser<'source> {
             GenRule { production, action: crate::generator::ActionKind::Code(action) }
         }
     }
+
+    /// parse section defining token kinds
+    /// tokenkind Token {
+    ///     Plus = "+",
+    ///     Star = "*",
+    ///     LParen = "(",
+    ///     RParen = ")",
+    ///     Identifier(..) = "identifier",
+    /// };
+    fn parse_token_kinds(&mut self) -> (String, Vec<TokenKindDef>) {
+        self.expect(Token::KwTokenKind);
+
+        let token_type = match self.advance() {
+            Some(Token::Ident(n)) => n,
+            t => panic!("Expected TokenKind Name, found {:?}", t),
+        };
+
+        self.expect(Token::LBrace);
+
+        let mut defs = Vec::new();
+
+        while let Some(token) = self.peek() {
+            if *token == Token::RBrace {
+                break;
+            }
+
+            let name = match self.advance() {
+                Some(Token::Ident(n)) => n,
+                t => panic!("Expected Token Name, found {:?}", t),
+            };
+            let is_unit = if let Some(Token::LParen) = self.peek() {
+                self.advance();
+                self.expect(Token::DoubleDot);
+                self.expect(Token::RParen);
+                false
+            } else {
+                true
+            };
+
+            self.expect(Token::Equal);
+
+            let kind = match self.advance() {
+                Some(Token::StringLiteral(s)) => s,
+                t => panic!("Expected String Literal, found {:?}", t),
+            };
+
+            defs.push(TokenKindDef { name, kind, is_unit });
+            
+            self.expect(Token::Comma);
+        }
+
+        self.expect(Token::RBrace);
+        self.expect(Token::Semi);
+
+        (token_type, defs)
+    }
 }
 
 #[test]
@@ -272,6 +353,15 @@ fn test() {
         // use rust code
         extern {
             use crate::ast::{Expr, Opcode};
+        };
+
+        // unique kind for each token
+        tokenkind Token {
+            Plus = "+",  // corresponds to Token::Plus
+            Star = "*",
+            LParen = "(",
+            RParen = ")",
+            Identifier(..) = "identifier",
         };
 
         // define SemanticAction
@@ -298,6 +388,11 @@ fn test() {
         };
     "#;
 
+    // let lexer = Token::lexer(input);
+    // for token in lexer {
+    //     println!("Token: {:?}", token);
+    // }
+
     println!("Starting Parser...");
     let mut parser = Parser::new(input);
 
@@ -307,6 +402,12 @@ fn test() {
         Ok(grammar) => {
             println!("imported code:\n{}", grammar.extern_code.unwrap_or_default());
             println!("Semantic Action Type: {:?}", grammar.semantic_action_type);
+            println!("Token Type : {}", grammar.token_ty);
+            for token_kind in grammar.token_kinds {
+                let unit_display = if token_kind.is_unit { "" } else { "(..)" };
+                println!("TokenKind: {}{} = {:?}", token_kind.name, unit_display, token_kind.kind);
+            }
+            
             for def in grammar.rule_groups {
                 println!("NonTerminal: {}", def.name);
                 println!("  Type: {}", def.return_type);

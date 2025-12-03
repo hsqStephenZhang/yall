@@ -492,28 +492,28 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
 
         let start_end_tks = quote! {
             const FINAL_STATES_SET: phf::Set<usize> = phf::phf_set! { #(#final_states),* } ;
-            const STATES_NUM: usize = #state_num ;
             const START_STATE: usize = #start_state ;
             const END_STATE: usize = #end_state ;
         };
 
-        let transition_maps = self
-            .transitions
-            .iter()
-            .map(|(DfaStateId(state_id), trans_map)| {
-                let entries = trans_map
-                    .iter()
-                    .map(|(symbol, DfaStateId(target_id))| {
-                        let sym_id = match symbol {
-                            Symbol::Term(t) => t.id(),
-                            Symbol::NonTerm(nt) => nt.0.as_str(),
-                            Symbol::Epsilon => {
-                                panic!("Epsilon found in DFA transition, which is invalid")
-                            }
-                        };
-                        quote! { #sym_id => #target_id }
-                    })
-                    .collect::<Vec<_>>();
+        let transition_maps = (start_state..(start_state + state_num))
+            .map(|state_id| {
+                let entries = match self.transitions.get(&DfaStateId(state_id)) {
+                    None => vec![],
+                    Some(trans_map) => trans_map
+                        .iter()
+                        .map(|(symbol, DfaStateId(target_id))| {
+                            let sym_id = match symbol {
+                                Symbol::Term(t) => t.id(),
+                                Symbol::NonTerm(nt) => nt.0.as_str(),
+                                Symbol::Epsilon => {
+                                    panic!("Epsilon found in DFA transition, which is invalid")
+                                }
+                            };
+                            quote! { #sym_id => #target_id }
+                        })
+                        .collect::<Vec<_>>(),
+                };
                 let name = format_ident!("TRANSITION{}", state_id);
                 quote! {
                     static #name: phf::Map<&'static str, usize> = phf::phf_map! { #(#entries),* } ;
@@ -547,36 +547,54 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             const REDUCE_RULE: &[Option<usize>] = &[ #(#reduce_table),* ] ;
         };
 
+        let rules_table = grammar.rules.iter().map(|rule| {
+            let left = &rule.left.0;
+            let right = rule.right.iter().map(|sym| match sym {
+                Symbol::Term(t) => {
+                    let id = t.id();
+                    quote! { #id }
+                }
+                Symbol::NonTerm(nt) => {
+                    let id = &nt.0;
+                    quote! { #id }
+                }
+                Symbol::Epsilon => quote! { "" },
+            });
+            quote! { (#left, &[#(#right),*]) }
+        });
+
+        let rules_table = quote! {
+            const RULES: &[(&str, &[&str])] = &[ #(#rules_table),* ] ;
+        };
+
+        let lookup_item = self.conflict_resolver.iter().map(|(DfaStateId(state_id), set)| {
+            let lookaheads = set.iter().map(|tk| {
+                let id = tk.id();
+                quote! { #id }
+            });
+            quote! {
+                #state_id => phf::phf_set!{ #(#lookaheads),* }
+            }
+        });
+        
+        let lookup_set = quote! {
+            static CONFLICT_RESOLVER: phf::Map<usize, phf::Set<&'static str>> = phf::phf_map! {
+                #(#lookup_item),*
+            } ;
+        };
+
         quote! {
             #start_end_tks
 
             #(#transition_maps)*
 
             #transition
-            
+
             #reduce_table
+
+            #rules_table
+
+            #lookup_set
         }
     }
 }
-
-// const STATES_NUM: usize = 10;
-
-// const FINAL_STATES_SET: phf::Set<usize> = phf::phf_set! {};
-
-// const START_STATE: usize = 0;
-// const END_STATE: usize = 9;
-
-// static TRANSITION1: phf::Map<&'static str, usize> = phf::phf_map! {
-//     "+" => 0,
-//     "-" => 1,
-//     "*" => 2,
-//     "/" => 3,
-// };
-
-// static TRANSITION2: phf::Map<&'static str, usize> = phf::phf_map! {};
-
-// // from each state id to its transition map
-// const TRANSITIONS: &[&phf::Map<&'static str, usize>] = &[&TRANSITION1, &TRANSITION2];
-
-// // reduce rule for each state,
-// const REDUCE_RULE: &[Option<usize>] = &[None, Some(1)];

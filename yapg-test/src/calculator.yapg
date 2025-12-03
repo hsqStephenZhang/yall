@@ -2,6 +2,15 @@ extern {
     use crate::ast::*;
 };
 
+// unique kind for each token
+tokenkind Token {
+    Plus = "+",  // corresponds to Token::Plus
+    Star = "*",
+    LParen = "(",
+    RParen = ")",
+    Identifier(..) = "identifier",
+};
+
 // define SemanticAction
 SemanticAction = SemanticAction;
 

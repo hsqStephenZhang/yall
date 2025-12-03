@@ -1,6 +1,10 @@
 #![allow(unused)]
 
-use crate::grammar::TerminalKind;
+use tracing::trace;
+
+use crate::grammar::{Symbol, TerminalKind};
+use crate::nfa_dfa::PrintableDFAState;
+use crate::parser::{ParseContext, PdaImpl};
 // these are pre-defined AST nodes
 #[derive(Debug)]
 pub enum Expr {
@@ -39,7 +43,7 @@ impl From<Token> for Identifier {
 }
 
 #[derive(Debug, Clone, Eq)]
-enum Token {
+pub enum Token {
     LParen,
     RParen,
     Plus,
@@ -201,6 +205,103 @@ type ActionFn = fn(&mut SemanticAction, &mut Vec<Value>) -> Value;
 const RULE_TABLE: &[ActionFn] =
     &[rule_0, rule_1, rule_2, rule_3, rule_4, rule_5, rule_6, rule_7, rule_8];
 
+const FINAL_STATES_SET: phf::Set<usize> = phf::phf_set! { 3usize , 6usize , 2usize , 4usize , 13usize , 1usize , 11usize , 8usize , 12usize };
+const STATES_NUM: usize = 14usize;
+const START_STATE: usize = 0usize;
+const END_STATE: usize = 2usize;
+static TRANSITION0: phf::Map<&'static str, usize> = phf::phf_map! { "Factor" => 1usize , "Term" => 3usize , "identifier" => 4usize , "(" => 5usize , "Expr" => 2usize };
+static TRANSITION1: phf::Map<&'static str, usize> =
+    phf::phf_map! { "FactorOp" => 7usize , "*" => 6usize };
+static TRANSITION2: phf::Map<&'static str, usize> =
+    phf::phf_map! { "+" => 8usize , "ExprOp" => 9usize };
+static TRANSITION3: phf::Map<&'static str, usize> = phf::phf_map! {};
+static TRANSITION4: phf::Map<&'static str, usize> = phf::phf_map! {};
+static TRANSITION5: phf::Map<&'static str, usize> = phf::phf_map! { "identifier" => 4usize , "Term" => 3usize , "(" => 5usize , "Factor" => 1usize , "Expr" => 10usize };
+static TRANSITION6: phf::Map<&'static str, usize> = phf::phf_map! {};
+static TRANSITION7: phf::Map<&'static str, usize> =
+    phf::phf_map! { "(" => 5usize , "Term" => 11usize , "identifier" => 4usize };
+static TRANSITION8: phf::Map<&'static str, usize> = phf::phf_map! {};
+static TRANSITION9: phf::Map<&'static str, usize> = phf::phf_map! { "Factor" => 12usize , "(" => 5usize , "Term" => 3usize , "identifier" => 4usize };
+static TRANSITION10: phf::Map<&'static str, usize> =
+    phf::phf_map! { "ExprOp" => 9usize , "+" => 8usize , ")" => 13usize };
+static TRANSITION11: phf::Map<&'static str, usize> = phf::phf_map! {};
+static TRANSITION12: phf::Map<&'static str, usize> =
+    phf::phf_map! { "*" => 6usize , "FactorOp" => 7usize };
+static TRANSITION13: phf::Map<&'static str, usize> = phf::phf_map! {};
+static TRANSITIONS: &[&phf::Map<&'static str, usize>] = &[
+    &TRANSITION0,
+    &TRANSITION1,
+    &TRANSITION2,
+    &TRANSITION3,
+    &TRANSITION4,
+    &TRANSITION5,
+    &TRANSITION6,
+    &TRANSITION7,
+    &TRANSITION8,
+    &TRANSITION9,
+    &TRANSITION10,
+    &TRANSITION11,
+    &TRANSITION12,
+    &TRANSITION13,
+];
+const REDUCE_RULE: &[Option<usize>] = &[
+    None,
+    Some(2usize),
+    Some(0usize),
+    Some(5usize),
+    Some(7usize),
+    None,
+    Some(6usize),
+    None,
+    Some(3usize),
+    None,
+    None,
+    Some(4usize),
+    Some(1usize),
+    Some(8usize),
+];
+const RULES: &[(&str, &[&str])] = &[
+    ("S'", &["Expr"]),
+    ("Expr", &["Expr", "ExprOp", "Factor"]),
+    ("Expr", &["Factor"]),
+    ("ExprOp", &["+"]),
+    ("Factor", &["Factor", "FactorOp", "Term"]),
+    ("Factor", &["Term"]),
+    ("FactorOp", &["*"]),
+    ("Term", &["identifier"]),
+    ("Term", &["(", "Expr", ")"]),
+];
+static CONFLICT_RESOLVER: phf::Map<usize, phf::Set<&'static str>> = phf::phf_map! { 1usize => phf :: phf_set ! { "+" , ")" } , 2usize => phf :: phf_set ! { } , 12usize => phf :: phf_set ! { "+" , ")" } };
+
+pub struct ExprParser<Actioner> {
+    actioner: Actioner,
+}
+
+impl ExprParser<SemanticAction> {
+    pub fn new(actioner: SemanticAction) -> Self {
+        Self { actioner }
+    }
+
+    pub fn parse_inner<I: Iterator<Item = Token>>(
+        self,
+        token_stream: std::iter::Peekable<I>,
+    ) -> Option<Box<Expr>> {
+        let actions = RULE_TABLE;
+        let ctx = ParseContext {
+            start_state: START_STATE,
+            end_state: END_STATE,
+            final_states: FINAL_STATES_SET,
+            transitions: TRANSITIONS,
+            reduce_rule: REDUCE_RULE,
+            rules: RULES,
+            conflict_resolver: &CONFLICT_RESOLVER,
+        };
+        let mut pda: PdaImpl<'_, Value, SemanticAction> =
+            PdaImpl::new(START_STATE, self.actioner, actions);
+        if pda.process(token_stream, &ctx) { Some(pda.final_value().into_expr()) } else { None }
+    }
+}
+
 #[test]
 fn test_expr() {
     use crate::nfa_dfa::DFA;
@@ -233,9 +334,6 @@ fn test_expr() {
     }
 
     let dfa = DFA::build(&grammar);
-    let code = dfa.generate_rust_code(&grammar).to_string();
-    let actioner = SemanticAction;
-    let mut pda = PDA::new(dfa, grammar, actioner, RULE_TABLE);
     let ts = vec![
         Token::Identifier("x".to_string()),
         Token::Plus,
@@ -248,10 +346,7 @@ fn test_expr() {
         Token::RParen,
     ];
 
-    let res = pda.process(ts.into_iter().peekable());
-    let top = pda.final_value();
-    println!("Result: {}", res);
-    println!("AST: {:?}", top.into_expr());
-
-    println!("Generated DFA Code:\n{}", code);
+    let parser = ExprParser::new(SemanticAction {});
+    let res = parser.parse_inner(ts.into_iter().peekable()).unwrap();
+    println!("Result: {:?}", res);
 }

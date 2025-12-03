@@ -353,5 +353,8 @@ dependencies = [
 name = "yapg-test"
 version = "0.1.0"
 dependencies = [
+ "phf",
+ "tracing",
+ "tracing-subscriber",
  "yapg",
 ]

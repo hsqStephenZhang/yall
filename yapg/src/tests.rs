@@ -192,7 +192,7 @@ impl From<Token> for Identifier {
 }
 
 #[derive(Debug, Clone, Eq)]
-enum Token {
+pub enum Token {
     LParen,
     RParen,
     Plus,
@@ -212,6 +212,7 @@ impl std::hash::Hash for Token {
     }
 }
 
+// should be generated from grammar
 impl From<&str> for Token {
     fn from(s: &str) -> Self {
         match s {
@@ -224,6 +225,7 @@ impl From<&str> for Token {
     }
 }
 
+// should be generated from grammar
 impl TerminalKind for Token {
     fn id(&self) -> &str {
         match self {
@@ -236,6 +238,7 @@ impl TerminalKind for Token {
     }
 }
 
+// should be generated from grammar
 impl From<Token> for Value {
     fn from(token: Token) -> Self {
         Value::Token(token)
@@ -309,12 +312,13 @@ fn test_expr() {
 }
 "#;
 
-    let generator = Generator::new(GenGrammar {
-        rule_groups: defs.clone(),
-        semantic_action_type: Some("SemanticAction".to_string()),
-        extern_code: None,
-    });
-    let generated_code =
-        PRE_DEFINED.to_string() + "\n" + &generator.generate().to_string() + usage;
+    let generator = Generator::new(GenGrammar::new(
+        defs.clone(),
+        "Token".to_string(),
+        vec![],
+        Some("SemanticAction".to_string()),
+        None,
+    ));
+    let generated_code = PRE_DEFINED.to_string() + "\n" + &generator.generate().to_string() + usage;
     std::fs::write("src/generated.rs", generated_code).unwrap();
 }

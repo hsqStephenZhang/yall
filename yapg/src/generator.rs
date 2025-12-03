@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::TokenStream;
@@ -48,13 +49,42 @@ pub struct GenRule {
 }
 
 #[derive(Debug, Clone)]
+pub struct TokenKindDef {
+    pub name: String,
+    pub kind: String,
+    // default is true
+    pub is_unit: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct GenGrammar {
     pub rule_groups: Vec<GenRuleGroup>,
+    pub token_ty: String,
+    pub token_kinds: Vec<TokenKindDef>,
     pub semantic_action_type: Option<String>,
     pub extern_code: Option<String>,
+
+    non_terminals: OnceCell<HashSet<String>>,
 }
 
 impl GenGrammar {
+    pub fn new(
+        rule_groups: Vec<GenRuleGroup>,
+        token_ty: String,
+        token_kinds: Vec<TokenKindDef>,
+        semantic_action_type: Option<String>,
+        extern_code: Option<String>,
+    ) -> Self {
+        Self {
+            rule_groups,
+            token_ty,
+            token_kinds,
+            semantic_action_type,
+            extern_code,
+            non_terminals: OnceCell::new(),
+        }
+    }
+
     // verify the integrity of the grammar
     pub fn verify(&self) -> bool {
         if self.semantic_action_type.is_none() {
@@ -67,6 +97,70 @@ impl GenGrammar {
             }
         }
         true
+    }
+
+    pub fn non_terminals(&self) -> &HashSet<String> {
+        self.non_terminals.get_or_init(|| {
+            let mut nts = HashSet::new();
+            for group in &self.rule_groups {
+                nts.insert(group.name.clone());
+            }
+            nts
+        })
+    }
+
+    pub fn to_grammar(&self) -> crate::grammar::Grammar<crate::grammar::Terminal> {
+        let start_sym = self.rule_groups[0].name.clone();
+        let pseduo_start_sym = format!("{}'", &start_sym);
+        let mut rules: Vec<crate::grammar::Rule<crate::grammar::Terminal>> =
+            Vec::with_capacity(self.rule_groups.iter().map(|g| g.rules.len()).sum::<usize>() + 1);
+        rules.push(crate::grammar::Rule {
+            left: pseduo_start_sym.clone().into(),
+            right: vec![crate::grammar::Symbol::NonTerm(start_sym.clone().into())],
+        });
+
+        assert!(
+            !self.rule_groups.iter().any(|g| g.name == pseduo_start_sym),
+            "The grammar contains a non-terminal named {}, which conflicts with the pseudo start symbol",
+            pseduo_start_sym
+        );
+        let non_terminals = self.non_terminals();
+        let token_variant_to_kind = self
+            .token_kinds
+            .iter()
+            .map(|tk| (tk.name.clone(), tk.kind.clone()))
+            .collect::<HashMap<_, _>>();
+        rules.extend(self.rule_groups.iter().flat_map(|group| {
+            group.rules.iter().map(|rule| crate::grammar::Rule {
+                left: group.name.clone().into(),
+                right: rule
+                    .production
+                    .iter()
+                    .map(|s| {
+                        if non_terminals.contains(s) {
+                            crate::grammar::Symbol::NonTerm(s.into())
+                        } else {
+                            assert!(
+                                s.starts_with(self.token_ty.as_str()),
+                                "The grammar uses token kind '{}' which is not defined",
+                                s
+                            );
+                            let s = s.trim_start_matches(self.token_ty.as_str());
+                            let s = s.trim_start_matches("::");
+                            assert!(
+                                token_variant_to_kind.contains_key(s),
+                                "The grammar uses token kind '{}' which is not defined",
+                                s
+                            );
+                            crate::grammar::Symbol::Term(crate::grammar::Terminal(
+                                token_variant_to_kind.get(s).unwrap().clone(),
+                            ))
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        }));
+        crate::grammar::Grammar::new(pseduo_start_sym.into(), start_sym.into(), rules)
     }
 }
 
@@ -96,15 +190,25 @@ impl Generator {
     pub fn generate(self) -> TokenStream {
         let extern_code = self.grammar.extern_code.as_ref().map(String::as_str).unwrap_or("");
         let extern_code: syn::File = syn::parse_str(extern_code).expect("Invalid extern code");
+        let token_terminal_kind_impl = self.gen_terminal_kind_impl();
         let value_enum = self.gen_value_enum();
         let action_fns = self.gen_action_fns();
-        let table = self.gen_table();
+        let action_table = self.gen_table();
+        let parser = self.gen_parser();
+
+        let grammar = self.grammar.to_grammar();
+        let dfa = crate::nfa_dfa::DFA::build(&grammar);
+        let tables = dfa.generate_rust_code(&grammar);
 
         quote! {
+            #[allow(warnings)]
             #extern_code
+            #token_terminal_kind_impl
             #value_enum
             #action_fns
-            #table
+            #action_table
+            #tables
+            #parser
         }
     }
 
@@ -275,6 +379,94 @@ impl Generator {
             const RULE_TABLE: &[ActionFn] = &[
                 #(#rows),*
             ];
+        }
+    }
+
+    fn gen_parser(&self) -> TokenStream {
+        let parser_name = format_ident!("{}Parser", "Expr");
+        let sema_ty = match self.grammar.semantic_action_type.as_ref() {
+            None => "()",
+            Some(ty) => ty.as_str(),
+        };
+        let sema_ty: syn::Type =
+            syn::parse_str(sema_ty).expect(&format!("Invalid SemanticAction type {}", sema_ty));
+
+        let parser = quote! {
+            pub struct #parser_name<Actioner> {
+                actioner: Actioner,
+            }
+
+            impl #parser_name<#sema_ty> {
+                pub fn new(actioner: #sema_ty) -> Self {
+                    Self { actioner }
+                }
+
+                pub fn parse<I: Iterator<Item = Token>>(
+                    self,
+                    token_stream: std::iter::Peekable<I>,
+                ) -> Option<Box<Expr>> {
+                    let actions = RULE_TABLE;
+                    let ctx = yapg::parser::ParseContext {
+                        start_state: START_STATE,
+                        end_state: END_STATE,
+                        final_states: FINAL_STATES_SET,
+                        transitions: TRANSITIONS,
+                        reduce_rule: REDUCE_RULE,
+                        rules: RULES,
+                        conflict_resolver: &CONFLICT_RESOLVER,
+                    };
+                    let mut pda: yapg::parser::PdaImpl<'_, Value, #sema_ty> =
+                        yapg::parser::PdaImpl::new(START_STATE, self.actioner, actions);
+                    if pda.process(token_stream, &ctx) { Some(pda.final_value().into_expr()) } else { None }
+                }
+            }
+        };
+
+        parser
+    }
+
+    /// generate TerminalKind impl for the token enum
+    /// ```ignore
+    /// impl TerminalKind for Token {
+    ///     fn id(&self) -> &str {
+    ///         match self {
+    ///             Token::LParen => "(",
+    ///             Token::RParen => ")",
+    ///             Token::Plus => "+",
+    ///             Token::Star => "*",
+    ///             Token::Identifier(..) => "identifier",
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    fn gen_terminal_kind_impl(&self) -> TokenStream {
+        let token_ty: syn::Type = syn::parse_str(self.grammar.token_ty.as_str()).unwrap();
+        let items = self.grammar.token_kinds.iter().map(|tk| {
+            let variant = format_ident!("{}", tk.name);
+            let suffix = if tk.is_unit {
+                quote! {}
+            } else {
+                quote! { (..) }
+            };
+            let kind = tk.kind.as_str();
+            quote! {
+                #token_ty::#variant #suffix => #kind,
+            }
+        });
+        quote! {
+            impl yapg::grammar::TerminalKind for #token_ty {
+                fn id(&self) -> &str {
+                    match self {
+                        #(#items)*
+                    }
+                }
+            }
+
+            impl From<#token_ty> for Value {
+                fn from(token: Token) -> Self {
+                    Value::Token(token)
+                }
+            }
         }
     }
 }
