@@ -202,6 +202,7 @@ impl Generator {
 
         quote! {
             #[allow(warnings)]
+            #[allow(unused)]
             #extern_code
             #token_terminal_kind_impl
             #value_enum
@@ -279,6 +280,7 @@ impl Generator {
 
         let fn0_name = format_ident!("rule_{}", 0usize);
         funcs.push(quote! {
+            #[allow(unused)]
             #[allow(clippy::ptr_arg)]
             fn #fn0_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
                 unreachable!("rule 0's action should never be called")
@@ -317,6 +319,7 @@ impl Generator {
                         let user_action: TokenStream =
                             syn::parse_str(&code).expect("Invalid action code");
                         funcs.push(quote! {
+                            #[allow(unused)]
                             fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
                                 #(#pops)*
                                 let result = { #user_action };
@@ -337,13 +340,14 @@ impl Generator {
                         let method = format_ident!("{}", method);
 
                         funcs.push(quote! {
-                    fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
-                        #(#pops)*
-                        let args = #args;
-                        let result = SemanticAction::#method(action, args);
-                        Value::#result_variant(result)
-                    }
-                });
+                            #[allow(unused)]
+                            fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+                                #(#pops)*
+                                let args = #args;
+                                let result = SemanticAction::#method(action, args);
+                                Value::#result_variant(result)
+                            }
+                        });
                     }
                 }
             }
@@ -487,7 +491,9 @@ impl Configuration {
 
     pub fn build(self) -> std::io::Result<()> {
         let out_path = std::env::var("OUT_DIR").expect("OUT_DIR not set");
-        std::fs::create_dir_all(&out_path).expect("Failed to create output directory");
+        let out_path = std::path::Path::new(&out_path);
+        std::fs::create_dir_all(out_path)?;
+
         for file in &self.grammar_files {
             tracing::trace!("Processing grammar file: {}", file);
             let content = std::fs::read_to_string(file)
@@ -495,8 +501,23 @@ impl Configuration {
             let grammar = Parser::new(&content).parse_grammar();
             let generator = Generator::new(grammar);
             let generated_code = generator.generate();
-            let out_path = format!("{}.rs", file.trim_end_matches(".yapg"));
-            let _ = std::fs::write(&out_path, generated_code.to_string())?;
+            let filename = std::path::Path::new(file)
+                .file_name()
+                .expect("Grammar file path should have a file name")
+                .to_str()
+                .unwrap();
+            let path = out_path.join(format!("{}.rs", filename));
+
+            let _ = std::fs::write(&path, generated_code.to_string())?;
+
+            let status = std::process::Command::new("rustfmt")
+                .arg(&path)
+                .status()
+                .expect("Failed to run rustfmt");
+
+            if !status.success() {
+                panic!("rustfmt failed");
+            }
         }
         Ok(())
     }

@@ -1,7 +1,10 @@
 use crate::ast::SemanticAction;
 
 mod ast;
-mod calculator;
+
+pub mod calculator {
+    include!(concat!(env!("OUT_DIR"), "/calculator.yapg.rs"));
+}
 
 fn main() {
     let _ = tracing_subscriber::fmt()
