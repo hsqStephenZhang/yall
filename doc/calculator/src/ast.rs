@@ -1,5 +1,7 @@
 #![allow(unused)]
 
+use std::collections::HashMap;
+
 use yapg::grammar::TerminalKind;
 
 // these are pre-defined AST nodes
@@ -7,6 +9,16 @@ use yapg::grammar::TerminalKind;
 pub enum Expr {
     Identifier(Identifier),
     Op(Box<Expr>, Opcode, Box<Expr>),
+    Evaluted(i32),
+}
+
+impl Expr {
+    pub fn into_i32(self) -> i32 {
+        match self {
+            Expr::Evaluted(v) => v,
+            _ => panic!("expected Evaluted Expr"),
+        }
+    }
 }
 
 #[derive(Debug)]

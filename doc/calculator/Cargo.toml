@@ -1,13 +1,13 @@
 [package]
-name = "yapg-test"
+name = "calculator"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-yapg = { path = "../yapg" }
+yapg = { path = "../../yapg" }
 
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [build-dependencies]
-yapg = { path = "../yapg" }
+yapg = { path = "../../yapg" }
