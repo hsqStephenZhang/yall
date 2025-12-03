@@ -365,12 +365,11 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                     })
                     .collect::<HashSet<_>>();
                 trace!(
-                    "follower set: {:?}, shift_sym: {:?}, resolved: {}",
+                    "follower set: {:?}, shift_sym: {:?}, resolved: {}\n",
                     followers,
                     shift_syms,
                     followers.intersection(&shift_syms).collect::<HashSet<_>>().is_empty()
                 );
-                println!();
             }
         }
 

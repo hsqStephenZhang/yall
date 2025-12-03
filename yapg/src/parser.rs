@@ -61,7 +61,7 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
         Tk: std::fmt::Debug + TerminalKind,
         Value: From<Tk> + std::fmt::Debug,
     {
-        println!("handling token: {:?}", tk);
+        trace!("handling token: {:?}", tk);
         assert!(!self.stack.is_empty());
 
         // first try to shift
