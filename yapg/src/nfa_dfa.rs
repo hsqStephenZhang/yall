@@ -490,45 +490,64 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             self.final_states.iter().map(|DfaStateId(id)| quote! { #id }).collect::<Vec<_>>();
 
         let start_end_tks = quote! {
-            const FINAL_STATES_SET: phf::Set<usize> = phf::phf_set! { #(#final_states),* } ;
+            fn __is_final_state(state_id: usize) -> bool {
+                match state_id {
+                    #(#final_states)|* => true,
+                    _ => false,
+                }
+            }
             const START_STATE: usize = #start_state ;
             const END_STATE: usize = #end_state ;
         };
 
-        let transition_maps = (start_state..(start_state + state_num))
-            .map(|state_id| {
-                let entries = match self.transitions.get(&DfaStateId(state_id)) {
-                    None => vec![],
-                    Some(trans_map) => trans_map
-                        .iter()
-                        .map(|(symbol, DfaStateId(target_id))| {
-                            let sym_id = match symbol {
-                                Symbol::Term(t) => t.id(),
-                                Symbol::NonTerm(nt) => nt.0.as_str(),
-                                Symbol::Epsilon => {
-                                    panic!("Epsilon found in DFA transition, which is invalid")
-                                }
-                            };
-                            quote! { #sym_id => #target_id }
-                        })
-                        .collect::<Vec<_>>(),
-                };
-                let name = format_ident!("TRANSITION{}", state_id);
+        // fn __transitionN(id: &str) -> Option<usize>
+        let individual_transition_fns = self
+            .transitions
+            .iter()
+            .map(|(state_id, trans_map)| {
+                let fn_name = format_ident!("__transition{}", state_id.0);
+
+                let match_arms = trans_map
+                    .iter()
+                    .map(|(symbol, DfaStateId(target_id))| {
+                        let sym_str = match symbol {
+                            Symbol::Term(t) => t.id(),
+                            Symbol::NonTerm(nt) => nt.0.as_str(),
+                            Symbol::Epsilon => {
+                                panic!("Epsilon found in DFA transition, which is invalid")
+                            }
+                        };
+                        quote! { #sym_str => Some(#target_id) }
+                    })
+                    .collect::<Vec<_>>();
+
                 quote! {
-                    static #name: phf::Map<&'static str, usize> = phf::phf_map! { #(#entries),* } ;
+                    fn #fn_name(id: &str) -> Option<usize> {
+                        match id {
+                            #(#match_arms,)*
+                            _ => None,
+                        }
+                    }
                 }
             })
             .collect::<Vec<_>>();
 
-        let transitions_array = (0..state_num)
-            .map(|state_id| {
-                let name = format_ident!("TRANSITION{}", state_id);
-                quote! { & #name }
-            })
-            .collect::<Vec<_>>();
+        // fn __transitions(cur: usize, id: &str) -> Option<usize>
+        let dispatch_arms = self.transitions.keys().map(|state_id| {
+            let state_id = state_id.0;
+            let fn_name = format_ident!("__transition{}", state_id);
+            quote! { 
+                #state_id => #fn_name(id)
+            }
+        });
 
-        let transition = quote! {
-            static TRANSITIONS: &[&phf::Map<&'static str, usize>] = &[ #(#transitions_array),* ] ;
+        let main_transition_fn = quote! {
+            fn __transitions(cur: usize, id: &str) -> Option<usize> {
+                match cur {
+                    #(#dispatch_arms,)*
+                    _ => None,
+                }
+            }
         };
 
         let reduce_table = (0..state_num)
@@ -566,34 +585,42 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             const RULES: &[(&str, &[&str])] = &[ #(#rules_table),* ] ;
         };
 
-        let lookup_item = self.conflict_resolver.iter().map(|(DfaStateId(state_id), set)| {
-            let lookaheads = set.iter().map(|tk| {
-                let id = tk.id();
-                quote! { #id }
-            });
-            quote! {
-                #state_id => phf::phf_set!{ #(#lookaheads),* }
+        let conflict_arms = self.conflict_resolver.iter().filter(|(_, s)| !s.is_empty()).map(
+            |(DfaStateId(state_id), set)| {
+                let lookaheads = set.iter().map(|tk| {
+                    let id = tk.id();
+                    quote! { #id }
+                });
+                quote! {
+                    #state_id => match token {
+                        #(#lookaheads)|* => true,
+                        _ => false
+                    }
+                }
+            },
+        );
+
+        let conflict_resolver_fn = quote! {
+            fn __conflict_resolver(state: usize, token: &str) -> bool {
+                match state {
+                    #(#conflict_arms,)*
+                    _ => true,
+                }
             }
-        });
-        
-        let lookup_set = quote! {
-            static CONFLICT_RESOLVER: phf::Map<usize, phf::Set<&'static str>> = phf::phf_map! {
-                #(#lookup_item),*
-            } ;
         };
 
         quote! {
             #start_end_tks
 
-            #(#transition_maps)*
+            #(#individual_transition_fns)*
 
-            #transition
+            #main_transition_fn
 
             #reduce_table
 
             #rules_table
 
-            #lookup_set
+            #conflict_resolver_fn
         }
     }
 }

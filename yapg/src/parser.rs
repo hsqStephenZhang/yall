@@ -2,14 +2,14 @@ use tracing::trace;
 
 use crate::grammar::TerminalKind;
 
-pub struct ParseContext<'a> {
+pub struct ParseContext {
     pub start_state: usize,
     pub end_state: usize,
-    pub final_states: phf::Set<usize>,
-    pub transitions: &'static [&'static phf::Map<&'static str, usize>],
+    pub is_final_state: fn(usize) -> bool,
+    pub transitions: fn(usize, &str) -> Option<usize>,
     pub reduce_rule: &'static [Option<usize>],
     pub rules: &'static [(&'static str, &'static [&'static str])],
-    pub conflict_resolver: &'a phf::Map<usize, phf::Set<&'static str>>,
+    pub conflict_resolver: fn(usize, &str) -> bool,
 }
 
 #[derive(Clone)]
@@ -38,8 +38,7 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
         Tk: std::fmt::Debug + TerminalKind,
         Value: From<Tk> + std::fmt::Debug,
     {
-        while token_stream.peek().is_some() {
-            let tk = token_stream.next().unwrap();
+        while let Some(tk) = token_stream.next() {
             if !self.process_one(tk, &mut token_stream, ctx) {
                 break;
             }
@@ -67,10 +66,10 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
         // first try to shift
         // push the next state onto the stack according to the dfa transition table
         let current_state = self.stack.last().unwrap();
-        let transition = ctx.transitions[*current_state];
-        if let Some(next_state) = transition.get(tk.id()) {
+        let transition = (ctx.transitions)(*current_state, tk.id());
+        if let Some(next_state) = transition {
             trace!("Shifted token: {:?}", tk);
-            self.stack.push(*next_state);
+            self.stack.push(next_state);
             self.value_stack.push(tk.into());
             trace!("stack after shift: {:?}", self.value_stack);
             trace!("pda stack after shift: {:?}", self.stack);
@@ -80,7 +79,7 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
         loop {
             let current_state_id = self.stack.last().unwrap();
 
-            if !ctx.final_states.contains(current_state_id) {
+            if !(ctx.is_final_state)(*current_state_id) {
                 break;
             }
 
@@ -88,17 +87,15 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             let rule_to_apply = ctx.reduce_rule[*current_state_id].unwrap();
 
             // resolve conflict by looking ahead
-            if let Some(follow_set) = ctx.conflict_resolver.get(current_state_id)
-                && let Some(next_tk) = token_stream.peek()
-            {
-                // not in the follow set, should not reduce
-                if !follow_set.contains(next_tk.id()) {
-                    break;
-                } else {
+            if let Some(next_tk) = token_stream.peek() {
+                // in the follow set, should reduce
+                if (ctx.conflict_resolver)(*current_state_id, next_tk.id()) {
                     trace!(
                         "Lookahead token '{:?}' is in follow set, reducing by rule {}",
                         next_tk, rule_to_apply
                     );
+                } else {
+                    break;
                 }
             }
 
@@ -117,12 +114,10 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             }
             let action_fn = self.actions[rule_to_apply];
             let top_state_id = self.stack.last().unwrap();
-            let transition = ctx.transitions[*top_state_id];
             let rule_left = ctx.rules[rule_to_apply].0;
-            let goto_state = transition
-                .get(rule_left)
+            let goto_state = (ctx.transitions)(*top_state_id, rule_left)
                 .unwrap_or_else(|| panic!("No goto state found! state: {}", top_state_id));
-            self.stack.push(*goto_state);
+            self.stack.push(goto_state);
             let result = action_fn(&mut self.actioner, &mut self.value_stack);
             self.value_stack.push(result);
             trace!("stack after reduce: {:?}", self.value_stack);

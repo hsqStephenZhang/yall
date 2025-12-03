@@ -413,11 +413,11 @@ impl Generator {
                     let ctx = yapg::parser::ParseContext {
                         start_state: START_STATE,
                         end_state: END_STATE,
-                        final_states: FINAL_STATES_SET,
-                        transitions: TRANSITIONS,
+                        is_final_state: __is_final_state,
+                        transitions: __transitions,
                         reduce_rule: REDUCE_RULE,
                         rules: RULES,
-                        conflict_resolver: &CONFLICT_RESOLVER,
+                        conflict_resolver: __conflict_resolver,
                     };
                     let mut pda: yapg::parser::PdaImpl<'_, Value, #sema_ty> =
                         yapg::parser::PdaImpl::new(START_STATE, self.actioner, actions);
