@@ -417,7 +417,7 @@ impl Generator {
                         transitions: __transitions,
                         reduce_rule: REDUCE_RULE,
                         rules: RULES,
-                        conflict_resolver: __conflict_resolver,
+                        lookahead: __lookahead,
                     };
                     let mut pda: yapg::parser::PdaImpl<'_, Value, #sema_ty> =
                         yapg::parser::PdaImpl::new(START_STATE, self.actioner, actions);

@@ -325,18 +325,20 @@ const RULES: &[(&str, &[&str])] = &[
     ("Term", &["identifier"]),
     ("Term", &["(", "Expr", ")"]),
 ];
-fn __conflict_resolver(state: usize, token: &str) -> bool {
-    match state {
-        12usize => match token {
-            "+" | ")" => true,
-            _ => false,
-        },
-        5usize => match token {
-            "+" | ")" => true,
-            _ => false,
-        },
-        _ => true,
-    }
+#[allow(warnings)]
+fn __conflict_resolver(state: usize, token: Option<&str>) -> Option<usize> {
+    todo!()
+    // match state {
+    //     12usize => match token {
+    //         "+" | ")" => true,
+    //         _ => false,
+    //     },
+    //     5usize => match token {
+    //         "+" | ")" => true,
+    //         _ => false,
+    //     },
+    //     _ => true,
+    // }
 }
 pub struct ExprParser<Actioner> {
     actioner: Actioner,
@@ -357,7 +359,7 @@ impl ExprParser<SemanticAction> {
             transitions: __transitions,
             reduce_rule: REDUCE_RULE,
             rules: RULES,
-            conflict_resolver: __conflict_resolver,
+            lookahead: __conflict_resolver,
         };
         let mut pda: crate::parser::PdaImpl<'_, Value, SemanticAction> =
             crate::parser::PdaImpl::new(START_STATE, self.actioner, actions);

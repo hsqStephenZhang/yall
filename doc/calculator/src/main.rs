@@ -14,7 +14,7 @@ fn main() {
 
     let actioner = SemanticAction;
     let parser = calculator::ExprParser::new(actioner);
-    let input = "a * b";
+    let input = "a";
     let tokens: Vec<ast::Token> = input.split_whitespace().map(|s| ast::Token::from(s)).collect();
     let res = parser.parse(tokens.into_iter().peekable());
     println!("Parse result: {:?}", res);

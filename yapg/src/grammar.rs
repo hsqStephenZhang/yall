@@ -61,7 +61,7 @@ pub enum Symbol<Tk> {
 }
 
 impl<Tk: TerminalKind> Symbol<Tk> {
-    pub fn name(&self) -> &str {
+    pub fn id(&self) -> &str {
         match self {
             Symbol::Term(s) => s.id(),
             Symbol::NonTerm(non_terminal) => &non_terminal.0,

@@ -93,4 +93,9 @@ impl SemanticAction {
         println!("Building Expr Op Node: {:?} {:?} {:?}", arg1, arg2, arg3);
         Box::new(Expr::Op(arg1, arg2, arg3))
     }
+
+    pub fn rule2(&mut self, term: Box<Expr>) -> Box<Expr> {
+        println!("Building Expr from Term Node: {:?}", term);
+        term
+    }
 }

@@ -74,7 +74,7 @@ impl DFAState {
                 if idx == grammar[rule].right.len() { Some(rule) } else { None }
             })
             .collect::<HashSet<_>>();
-        if reduce_rules.len() == 1 { Some(*reduce_rules.iter().next().unwrap()) } else { None }
+        if reduce_rules.len() == 1 { Some(reduce_rules.into_iter().next().unwrap()) } else { None }
     }
 }
 
@@ -116,7 +116,8 @@ pub struct DFA<Tk: Hash + Eq> {
     pub(crate) transitions: HashMap<DfaStateId, HashMap<Symbol<Tk>, DfaStateId>>,
     // set of final states that contains items like A -> α•
     pub(crate) final_states: HashSet<DfaStateId>,
-    pub(crate) conflict_resolver: HashMap<DfaStateId, HashSet<Tk>>,
+    // on inadequate states, the lookahead-based actions
+    pub(crate) lookahead: HashMap<DfaStateId, HashMap<BTreeSet<String>, Action>>,
     pub(crate) state_to_id: HashMap<DFAState, DfaStateId>,
     pub(crate) id_to_state: HashMap<DfaStateId, DFAState>,
 }
@@ -126,6 +127,29 @@ pub struct Conflict {
     pub shift: Item,
     // rule number
     pub reduce: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum Action {
+    // shift by rule number
+    Shift(usize),
+    // reduce by rule number
+    Reduce(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum FakeTk<Tk> {
+    Tk(Tk),
+    Eof,    
+}
+
+impl<Tk: TerminalKind> FakeTk<Tk> {
+    pub fn id(&self) -> &str {
+        match self {
+            FakeTk::Tk(tk) => tk.id(),
+            FakeTk::Eof => "$eofeofeof", // some unique string that won't conflict with real tokens, need to check with grammar
+        }
+    }
 }
 
 impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
@@ -279,8 +303,21 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             }
         }
 
+        let lookahead = Self::build_lookahead_for_lalr(&dfa_transitions, &id_to_state, grammar);
+
+        for ((state_id, item), lookahead_set) in &lookahead {
+            tracing::trace!(
+                "Lookahead for state {:?}, item {:?}: {:?}",
+                state_id,
+                PrintableNFAState(&NFAState(*item), grammar),
+                lookahead_set
+            );
+        }
+
+        let mut errors_collector = vec![];
+
         // mark all inadequate states
-        let inadequate_states: HashMap<DfaStateId, (HashSet<Item>, usize)> = final_states
+        let lookahead: HashMap<DfaStateId, HashMap<BTreeSet<String>, Action>> = final_states
             .iter()
             .filter_map(|&state_id| {
                 let state = &id_to_state[&state_id];
@@ -309,82 +346,157 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                         }
                     })
                     .collect::<HashSet<_>>();
+
+                let mut is_err = false;
+
+                // 1. reduce conflict that cannot be solved by lookahead
                 if reduce_rules.len() > 1 {
-                    panic!(
-                        "Reduce-reduce conflict detected at state:\n{:?}",
-                        PrintableDFAState(state, grammar)
-                    );
+                    let emtpy = HashSet::new();
+                    let lookaheads = reduce_rules
+                        .iter()
+                        .map(|idx| {
+                            let rule = &grammar.rules[*idx];
+                            lookahead
+                                .get(&(state_id, Item::new(*idx, rule.right.len())))
+                                .unwrap_or(&emtpy)
+                        })
+                        .collect::<Vec<_>>();
+                    // find conflicts that cannot be resolved by lookahead
+                    let flatten = lookaheads.iter().cloned().flatten().collect::<HashSet<_>>();
+                    let cnt1: usize = lookaheads.iter().map(|s| s.len()).sum();
+                    let cnt2 = flatten.len();
+                    if cnt1 != cnt2 {
+                        errors_collector.push(format!(
+                            "Reduce-reduce conflict cannot be resolved by lookahead at state:\n{:?}",
+                            PrintableDFAState(state, grammar)
+                        ));
+                        is_err = true;
+                    }
                 } else if shift_rules.len() > 1 {
                     let shift_lookahead = shift_rules
                         .iter()
                         .map(|item| {
                             let Item { rule, idx } = item;
                             let symbol = &grammar.rules[*rule].right[*idx];
-                            symbol.name()
+                            symbol.id()
                         })
                         .collect::<HashSet<_>>();
+                    // 2. shift-shift conflict
                     if shift_lookahead.len() != shift_rules.len() {
-                        panic!(
+                        errors_collector.push(format!(
                             "Shift-shift conflict cannot be resolved by lookahead at state:\n{:?}",
                             PrintableDFAState(state, grammar)
-                        );
+                        ));
+                        is_err = true;
                     }
-                    Some((state_id, (shift_rules, *reduce_rules.iter().next().unwrap())))
-                } else if reduce_rules.len() == 1 && shift_rules.len() == 1 {
-                    Some((state_id, (shift_rules, *reduce_rules.iter().next().unwrap())))
-                } else {
-                    None
-                }
-            })
-            .collect::<HashMap<_, _>>();
-
-        #[cfg(debug_assertions)]
-        {
-            use tracing::trace;
-            for (state_id, (shifts, reduce)) in &inadequate_states {
-                let state = &id_to_state[state_id];
-                trace!("Inadequate DFA State #{:?}:", state_to_id.get(state).unwrap());
-                for nfa_state in &state.0 {
-                    trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
-                }
-                for shift in shifts {
-                    trace!("    Shift on {:?}", PrintableNFAState(&NFAState(*shift), grammar));
                 }
 
-                let rule = &grammar.rules[*reduce];
-                trace!("    Reduce by rule: {:?}", rule);
-                let follow = grammar.follow_set();
-                let empty_set = HashSet::new();
-                let followers = follow.get(&(rule.left.clone().into())).unwrap_or(&empty_set);
-                let shift_syms = shifts
+                if is_err || shift_rules.len() + reduce_rules.len() <= 1 {
+                    return None;
+                } 
+
+                let shift_syms = shift_rules
                     .iter()
                     .map(|item| {
                         let Item { rule, idx } = item;
-                        let symbol = &grammar.rules[*rule].right[*idx];
-                        symbol.clone().into_term()
+                        grammar.rules[*rule].right[*idx].id()
                     })
                     .collect::<HashSet<_>>();
-                trace!(
-                    "follower set: {:?}, shift_sym: {:?}, resolved: {}\n",
-                    followers,
-                    shift_syms,
-                    followers.intersection(&shift_syms).collect::<HashSet<_>>().is_empty()
-                );
+                let reduce_syms = reduce_rules.iter().filter_map(|idx| {
+                    let rule = &grammar.rules[*idx];
+                    lookahead
+                        .get(&(state_id, Item::new(*idx, rule.right.len())))
+                        .map(|s| s.iter().map(|tk| tk.id()))
+                }).flatten().collect::<HashSet<_>>();
+
+                let intersection = shift_syms.intersection(&reduce_syms).collect::<HashSet<_>>();
+                if !intersection.is_empty() {
+                    errors_collector.push(format!(
+                        "Shift-reduce conflict cannot be resolved by lookahead at state:\n{:?}\nConflicting symbols: {:?}",
+                        PrintableDFAState(state, grammar),
+                        intersection
+                    ));
+                    return None;
+                }
+
+                // conflict detection is done, now build the resolver
+                
+                let mut resolver: HashMap<BTreeSet<String>, Action> = HashMap::new();
+
+                for shift_rule_idx in shift_rules {
+                    let Item { rule, idx } = shift_rule_idx;
+                    let symbol = &grammar.rules[rule].right[idx];
+                    let lookahead_set = BTreeSet::from([symbol.id().into()]);
+                    resolver.insert(lookahead_set, Action::Shift(rule));
+                }
+
+                for reduce_rule_idx in reduce_rules {
+                    let rule = &grammar.rules[reduce_rule_idx];
+                    let lookahead_set = lookahead
+                        .get(&(state_id, Item::new(reduce_rule_idx, rule.right.len())))
+                        .map(|s| s.iter().map(|tk| tk.id().to_string()).collect())
+                        .unwrap_or_default();
+                    resolver.insert(lookahead_set, Action::Reduce(reduce_rule_idx));
+                }
+
+                Some((state_id, resolver))
+            })
+            .collect::<HashMap<_, _>>();
+
+        if !errors_collector.is_empty() {
+            for err in errors_collector {
+                tracing::error!("{}", err);
             }
+            panic!("Conflicts detected in grammar, see errors above.");
         }
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     use tracing::trace;
+        //     for (state_id, (shifts, reduce)) in &inadequate_states {
+        //         let state = &id_to_state[state_id];
+        //         trace!("Inadequate DFA State #{:?}:", state_to_id.get(state).unwrap());
+        //         for nfa_state in &state.0 {
+        //             trace!("    {:?}", PrintableNFAState(nfa_state, grammar));
+        //         }
+        //         for shift in shifts {
+        //             trace!("    Shift on {:?}", PrintableNFAState(&NFAState(*shift), grammar));
+        //         }
+
+        //         let rule = &grammar.rules[*reduce];
+        //         trace!("    Reduce by rule: {:?}", rule);
+        //         let follow = grammar.follow_set();
+        //         let empty_set = HashSet::new();
+        //         let followers = follow.get(&(rule.left.clone().into())).unwrap_or(&empty_set);
+        //         let shift_syms = shifts
+        //             .iter()
+        //             .map(|item| {
+        //                 let Item { rule, idx } = item;
+        //                 let symbol = &grammar.rules[*rule].right[*idx];
+        //                 symbol.clone().into_term()
+        //             })
+        //             .collect::<HashSet<_>>();
+        //         trace!(
+        //             "follower set: {:?}, shift_sym: {:?}, resolved: {}\n",
+        //             followers,
+        //             shift_syms,
+        //             followers.intersection(&shift_syms).collect::<HashSet<_>>().is_empty()
+        //         );
+        //     }
+        // }
 
         // now we know that lookahead could resolve the conflicts
         // copy the follow set to DFA
-        let conflict_resolver = inadequate_states
-            .into_iter()
-            .map(|(state, (_shift, reduce))| {
-                let rule = &grammar.rules[reduce];
-                let follow = grammar.follow_set();
-                let empty_set = HashSet::new();
-                let followers = follow.get(&(rule.left.clone().into())).unwrap_or(&empty_set);
-                (state, followers.clone())
-            })
-            .collect();
+        // let conflict_resolver = inadequate_states
+        //     .into_iter()
+        //     .map(|(state, (_shift, reduce))| {
+        //         let rule = &grammar.rules[reduce];
+        //         let follow = grammar.follow_set();
+        //         let empty_set = HashSet::new();
+        //         let followers = follow.get(&(rule.left.clone().into())).unwrap_or(&empty_set);
+        //         (state, followers.clone())
+        //     })
+        //     .collect();
 
         let end =
             *dfa_transitions[&start].get(&Symbol::NonTerm(grammar.start_sym.clone())).unwrap();
@@ -394,17 +506,22 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             end,
             transitions: dfa_transitions,
             final_states,
-            conflict_resolver,
+            lookahead,
             state_to_id,
             id_to_state,
         }
     }
 
-    pub fn build_lookahead_for_lalr(
-        &self,
+    fn build_lookahead_for_lalr(
+        transitions: &HashMap<DfaStateId, HashMap<Symbol<Tk>, DfaStateId>>,
+        id_to_state: &HashMap<DfaStateId, DFAState>,
         grammar: &Grammar<Tk>,
-    ) -> HashMap<(DfaStateId, Item), HashSet<Tk>> {
-        let mut set: HashMap<(DfaStateId, Item), HashSet<Tk>> = HashMap::new();
+    ) -> HashMap<(DfaStateId, Item), HashSet<FakeTk<Tk>>> {
+        let mut set: HashMap<(DfaStateId, Item), HashSet<FakeTk<Tk>>> = HashMap::new();
+        set.insert(
+            (DfaStateId(0), Item::new(0, 0)),
+            HashSet::from_iter(vec![FakeTk::Eof]),
+        );
 
         let could_be_empty_nonterms = grammar.emptyables();
         let could_be_empty = |syms: &[Symbol<Tk>]| -> bool {
@@ -419,8 +536,8 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         while changed {
             changed = false;
 
-            for &cur_state in self.transitions.keys() {
-                let dfa_state = &self.id_to_state[&cur_state];
+            for &cur_state in transitions.keys() {
+                let dfa_state = &id_to_state[&cur_state];
                 for nfa_state in &dfa_state.0 {
                     let Item { rule, idx } = nfa_state.0;
                     let grammar_rule = &grammar.rules[rule];
@@ -428,7 +545,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                         // rule 1, propagate inside the cur_state(closure)
                         if matches!(symbol, Symbol::NonTerm(_)) {
                             let rest = &grammar_rule.right[idx + 1..];
-                            let mut first_set = grammar.first_set_of_symbols(rest);
+                            let mut first_set = grammar.first_set_of_symbols(rest).into_iter().map(|tk| FakeTk::Tk(tk)).collect::<HashSet<_>>();
                             // inside the state, the lookahead can only be propagated if the rest could be empty
                             if could_be_empty(rest) {
                                 first_set.extend(
@@ -460,7 +577,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                         }
 
                         // rule 2, from cur_state to next_state
-                        if let Some(next_state) = self.transitions[&cur_state].get(symbol)
+                        if let Some(next_state) = transitions[&cur_state].get(symbol)
                             && let Some(lookahead_set) = set.get(&(cur_state, nfa_state.0)).cloned()
                         {
                             let next_item = Item::new(rule, idx + 1);
@@ -478,10 +595,14 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         }
 
         // filter empty lookahead entries
-        set.into_iter().filter(|(_, lookahead_set)| !lookahead_set.is_empty()).collect()
+        // and only keep reducable states
+        set.into_iter()
+            .filter(|((_, item), lookahead_set)| {
+                !lookahead_set.is_empty() && grammar[item.rule].right.len() == item.idx
+            })
+            .collect()
     }
 
-    // should generate code like:
     pub fn generate_rust_code(&self, grammar: &Grammar<Tk>) -> TokenStream {
         let state_num = self.state_to_id.len();
         let start_state = self.start.0;
@@ -536,7 +657,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         let dispatch_arms = self.transitions.keys().map(|state_id| {
             let state_id = state_id.0;
             let fn_name = format_ident!("__transition{}", state_id);
-            quote! { 
+            quote! {
                 #state_id => #fn_name(id)
             }
         });
@@ -552,7 +673,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
 
         let reduce_table = (0..state_num)
             .map(|state_id| {
-                if let Some(reduce_rule) =
+                if !self.lookahead.contains_key(&DfaStateId(state_id)) && let Some(reduce_rule) =
                     self.id_to_state[&DfaStateId(state_id)].reduce_rule(grammar)
                 {
                     quote! { Some(#reduce_rule) }
@@ -585,26 +706,38 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             const RULES: &[(&str, &[&str])] = &[ #(#rules_table),* ] ;
         };
 
-        let conflict_arms = self.conflict_resolver.iter().filter(|(_, s)| !s.is_empty()).map(
-            |(DfaStateId(state_id), set)| {
-                let lookaheads = set.iter().map(|tk| {
-                    let id = tk.id();
-                    quote! { #id }
+        let eof_if = FakeTk::<Terminal>::Eof.id().to_string();
+        let lookahead_arms = self.lookahead.iter().map(
+            |(DfaStateId(state_id), resolver)| {
+                let lookaheads = resolver.iter().filter(|(lookahead, action)| !lookahead.is_empty() && matches!(action, Action::Reduce(_))).map(|(lookahead_set, action)| {
+                    let lookaheads = lookahead_set.iter().map(|tk| {
+                        if tk == &eof_if {
+                            quote! { None }
+                        } else {
+                            quote! { Some(#tk ) }
+                        }
+                    });
+                    match action {
+                        Action::Shift(_) => unreachable!(),
+                        Action::Reduce(idx) => quote! {
+                            #(#lookaheads)|* => Some(#idx),
+                        },
+                    }
+
                 });
                 quote! {
                     #state_id => match token {
-                        #(#lookaheads)|* => true,
-                        _ => false
+                        #(#lookaheads)*
+                        _ => None,
                     }
                 }
             },
         );
-
-        let conflict_resolver_fn = quote! {
-            fn __conflict_resolver(state: usize, token: &str) -> bool {
+        let lookahead_fn = quote! {
+            fn __lookahead(state: usize, token: Option<&str>) -> Option<usize> {
                 match state {
-                    #(#conflict_arms,)*
-                    _ => true,
+                    #(#lookahead_arms,)*
+                    _ => None,
                 }
             }
         };
@@ -620,7 +753,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
 
             #rules_table
 
-            #conflict_resolver_fn
+            #lookahead_fn
         }
     }
 }

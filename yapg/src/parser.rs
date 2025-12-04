@@ -1,3 +1,5 @@
+use core::panic;
+
 use tracing::trace;
 
 use crate::grammar::TerminalKind;
@@ -9,7 +11,7 @@ pub struct ParseContext {
     pub transitions: fn(usize, &str) -> Option<usize>,
     pub reduce_rule: &'static [Option<usize>],
     pub rules: &'static [(&'static str, &'static [&'static str])],
-    pub conflict_resolver: fn(usize, &str) -> bool,
+    pub lookahead: fn(usize, Option<&str>) -> Option<usize>,
 }
 
 #[derive(Clone)]
@@ -84,20 +86,19 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             }
 
             // in final state, need to reduce
-            let rule_to_apply = ctx.reduce_rule[*current_state_id].unwrap();
+            let rule_to_apply = match ctx.reduce_rule[*current_state_id] {
+                Some(rule_idx) => Some(rule_idx),
+                None => {
+                    (ctx.lookahead)(*current_state_id, token_stream.peek().map(|tk| tk.id()))
+                }
+            };
 
-            // resolve conflict by looking ahead
-            if let Some(next_tk) = token_stream.peek() {
-                // in the follow set, should reduce
-                if (ctx.conflict_resolver)(*current_state_id, next_tk.id()) {
-                    trace!(
-                        "Lookahead token '{:?}' is in follow set, reducing by rule {}",
-                        next_tk, rule_to_apply
-                    );
-                } else {
+            let rule_to_apply = match rule_to_apply {
+                Some(idx) => idx,
+                None => {
                     break;
                 }
-            }
+            };
 
             trace!("Reducing by rule {}", rule_to_apply);
             if rule_to_apply == 0
