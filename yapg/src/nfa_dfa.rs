@@ -734,6 +734,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             },
         );
         let lookahead_fn = quote! {
+            #[allow(unused)]
             fn __lookahead(state: usize, token: Option<&str>) -> Option<usize> {
                 match state {
                     #(#lookahead_arms,)*

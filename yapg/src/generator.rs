@@ -1,7 +1,7 @@
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::ToUpperCamelCase;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -413,14 +413,13 @@ impl Generator {
 
     fn gen_parser(&self) -> TokenStream {
         let start_sym = self.grammar.start_sym();
-        let start_sym_ty = self
-            .grammar
-            .type_of(&start_sym)
-            .expect("Start symbol must have a return type");
+        let start_sym_ty =
+            self.grammar.type_of(&start_sym).expect("Start symbol must have a return type");
 
         let extract_method_name = format_ident!("into_{}", start_sym.to_lowercase());
         let parser_name = format_ident!("{}Parser", start_sym.to_upper_camel_case());
-        let ty_name = format_ident!("{}", start_sym_ty);
+        let ty_name = syn::parse_str::<syn::Type>(start_sym_ty)
+            .expect(&format!("Invalid type for start symbol: {}", start_sym_ty));
         let sema_ty = match self.grammar.semantic_action_type.as_ref() {
             None => "()",
             Some(ty) => ty.as_str(),

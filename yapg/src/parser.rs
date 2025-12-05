@@ -65,6 +65,8 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
         trace!("handling token: {:?}", tk);
         assert!(!self.stack.is_empty());
 
+        let mut changed = false;
+
         // first try to shift
         // push the next state onto the stack according to the dfa transition table
         let current_state = self.stack.last().unwrap();
@@ -73,6 +75,7 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             trace!("Shifted token: {:?}", tk);
             self.stack.push(next_state);
             self.value_stack.push(tk.into());
+            changed = true;
             trace!("stack after shift: {:?}", self.value_stack);
             trace!("pda stack after shift: {:?}", self.stack);
         }
@@ -106,7 +109,7 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
                 && *self.stack.last().unwrap() == ctx.end_state
             {
                 trace!("Parse done!");
-                return false;
+                return changed;
             }
 
             let to_pop = ctx.rules[rule_to_apply].1.len();
@@ -121,10 +124,11 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             self.stack.push(goto_state);
             let result = action_fn(&mut self.actioner, &mut self.value_stack);
             self.value_stack.push(result);
+            changed = true;
             trace!("stack after reduce: {:?}", self.value_stack);
             trace!("pda stack after reduce: {:?}", self.stack);
         }
-        true
+        changed
     }
 
     pub fn final_value(self) -> Value {
