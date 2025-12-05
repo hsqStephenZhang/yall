@@ -1,0 +1,64 @@
+extern {
+    use crate::ast::*;
+    use crate::lexer::*;
+};
+
+tokenkind Token {
+    LBrace = "{",
+    RBrace = "}",
+    LBracket = "[",
+    RBracket = "]",
+    Colon = ":",
+    Comma = ",",
+    StringLit(..) = "string",
+    Number(..) = "number",
+    True = "true",
+    False = "false",
+    Null = "null",
+};
+
+Value: JsonValue = {
+    Object => JsonValue::Object(arg1.into()),
+    Array  => JsonValue::Array(arg1.into()),
+    Token::StringLit => JsonValue::String(arg1.into_stringlit()),
+    Token::Number    => JsonValue::Number(arg1.into_number()),
+    Token::True      => JsonValue::Bool(true),
+    Token::False     => JsonValue::Bool(false),
+    Token::Null      => JsonValue::Null,
+};
+
+Object: JsonObject = {
+    Token::LBrace Token::RBrace => JsonObject::new(),
+    Token::LBrace Members Token::RBrace => arg2,
+};
+
+Members: JsonObject = {
+    Pair => {
+        let mut obj = JsonObject::new();
+        obj.insert(arg1.0, arg1.1);
+        obj
+    },
+    Members Token::Comma Pair => {
+        let mut obj = arg1;
+        obj.insert(arg3.0, arg3.1);
+        obj
+    },
+};
+
+Pair: (String, JsonValue) = {
+    Token::StringLit Token::Colon Value => (arg1.into_stringlit(), arg3),
+};
+
+Array: Vec<JsonValue> = {
+    Token::LBracket Token::RBracket => vec![],
+    Token::LBracket Elements Token::RBracket => arg2,
+};
+
+Elements: Vec<JsonValue> = {
+    Value => vec![arg1],
+    Elements Token::Comma Value => {
+        let mut list = arg1;
+        list.push(arg3);
+        list
+    },
+};
