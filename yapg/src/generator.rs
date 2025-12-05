@@ -1,6 +1,7 @@
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -107,6 +108,19 @@ impl GenGrammar {
             }
             nts
         })
+    }
+
+    pub fn start_sym(&self) -> String {
+        self.rule_groups[0].name.clone()
+    }
+
+    pub fn type_of(&self, symbol: &str) -> Option<&String> {
+        for group in &self.rule_groups {
+            if group.name == symbol {
+                return Some(&group.return_type);
+            }
+        }
+        None
     }
 
     pub fn to_grammar(&self) -> crate::grammar::Grammar<crate::grammar::Terminal> {
@@ -275,6 +289,10 @@ impl Generator {
     /// }
     /// ```
     fn gen_action_fns(&self) -> TokenStream {
+        let semantic_action_ty: syn::Type = match self.grammar.semantic_action_type.as_ref() {
+            None => syn::parse_str("()").unwrap(),
+            Some(ty) => syn::parse_str(ty).expect("Invalid SemanticAction type"),
+        };
         let defs = &self.grammar.rule_groups;
         let mut funcs = Vec::new();
 
@@ -282,7 +300,7 @@ impl Generator {
         funcs.push(quote! {
             #[allow(unused)]
             #[allow(clippy::ptr_arg)]
-            fn #fn0_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+            fn #fn0_name(action: &mut #semantic_action_ty, stack: &mut Vec<Value>) -> Value {
                 unreachable!("rule 0's action should never be called")
             }
         });
@@ -320,7 +338,7 @@ impl Generator {
                             syn::parse_str(&code).expect("Invalid action code");
                         funcs.push(quote! {
                             #[allow(unused)]
-                            fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+                            fn #fn_name(action: &mut #semantic_action_ty, stack: &mut Vec<Value>) -> Value {
                                 #(#pops)*
                                 let result = { #user_action };
                                 Value::#result_variant(result)
@@ -341,10 +359,10 @@ impl Generator {
 
                         funcs.push(quote! {
                             #[allow(unused)]
-                            fn #fn_name(action: &mut SemanticAction, stack: &mut Vec<Value>) -> Value {
+                            fn #fn_name(action: &mut #semantic_action_ty, stack: &mut Vec<Value>) -> Value {
                                 #(#pops)*
                                 let args = #args;
-                                let result = SemanticAction::#method(action, args);
+                                let result = #semantic_action_ty::#method(action, args);
                                 Value::#result_variant(result)
                             }
                         });
@@ -359,6 +377,13 @@ impl Generator {
     }
 
     fn gen_table(&self) -> TokenStream {
+        let sema_ty = match self.grammar.semantic_action_type.as_ref() {
+            None => "()",
+            Some(ty) => ty.as_str(),
+        };
+        let sema_ty: syn::Type =
+            syn::parse_str(sema_ty).expect(&format!("Invalid SemanticAction type {}", sema_ty));
+
         let defs = &self.grammar.rule_groups;
         let mut rows = Vec::new();
         let fn_name = format_ident!("rule_{}", 0usize);
@@ -379,7 +404,7 @@ impl Generator {
         }
 
         quote! {
-            type ActionFn = fn(&mut SemanticAction, &mut Vec<Value>) -> Value;
+            type ActionFn = fn(&mut #sema_ty, &mut Vec<Value>) -> Value;
             const RULE_TABLE: &[ActionFn] = &[
                 #(#rows),*
             ];
@@ -387,7 +412,15 @@ impl Generator {
     }
 
     fn gen_parser(&self) -> TokenStream {
-        let parser_name = format_ident!("{}Parser", "Expr");
+        let start_sym = self.grammar.start_sym();
+        let start_sym_ty = self
+            .grammar
+            .type_of(&start_sym)
+            .expect("Start symbol must have a return type");
+
+        let extract_method_name = format_ident!("into_{}", start_sym.to_lowercase());
+        let parser_name = format_ident!("{}Parser", start_sym.to_upper_camel_case());
+        let ty_name = format_ident!("{}", start_sym_ty);
         let sema_ty = match self.grammar.semantic_action_type.as_ref() {
             None => "()",
             Some(ty) => ty.as_str(),
@@ -396,7 +429,7 @@ impl Generator {
             syn::parse_str(sema_ty).expect(&format!("Invalid SemanticAction type {}", sema_ty));
 
         let parser = quote! {
-            pub struct #parser_name<Actioner> {
+            pub(crate) struct #parser_name<Actioner> {
                 actioner: Actioner,
             }
 
@@ -408,7 +441,7 @@ impl Generator {
                 pub fn parse<I: Iterator<Item = Token>>(
                     self,
                     token_stream: std::iter::Peekable<I>,
-                ) -> Option<Box<Expr>> {
+                ) -> Option<#ty_name> {
                     let actions = RULE_TABLE;
                     let ctx = yapg::parser::ParseContext {
                         start_state: START_STATE,
@@ -421,7 +454,7 @@ impl Generator {
                     };
                     let mut pda: yapg::parser::PdaImpl<'_, Value, #sema_ty> =
                         yapg::parser::PdaImpl::new(START_STATE, self.actioner, actions);
-                    if pda.process(token_stream, &ctx) { Some(pda.final_value().into_expr()) } else { None }
+                    if pda.process(token_stream, &ctx) { Some(pda.final_value().#extract_method_name()) } else { None }
                 }
             }
         };

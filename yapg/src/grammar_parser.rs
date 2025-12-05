@@ -346,6 +346,35 @@ impl<'source> Parser<'source> {
     }
 }
 
+#[cfg(test)]
+mod tests{
+
+    use super::*;
+
+    #[test]
+    fn t1() {
+        let s = r#"
+        tokenkind Token {
+            LBrace = "{",
+            RBrace = "}",
+            LBracket = "[",
+            RBracket = "]",
+            Colon = ":",
+            Comma = ",",
+            StringLit(..) = "string",
+            Number(..) = "number",
+            True = "true",
+            False = "false",
+            Null = "null",
+        };
+        "#;
+        let lexer = Token::lexer(s);
+        for token in lexer {
+            println!("Token: {:?}", token);
+        }
+    }
+}
+
 #[test]
 fn test() {
     let input = r#"
