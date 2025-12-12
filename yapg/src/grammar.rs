@@ -6,7 +6,7 @@ use std::ops::Index;
 
 use tracing::debug;
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NonTerminal(pub(crate) String);
 
 impl NonTerminal {
@@ -26,7 +26,7 @@ pub trait TerminalKind {
     fn id(&self) -> &str;
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Terminal(pub(crate) String);
 
 impl Terminal {
@@ -53,7 +53,7 @@ impl std::fmt::Display for Terminal {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Symbol<Tk> {
     Term(Tk),
     NonTerm(NonTerminal),

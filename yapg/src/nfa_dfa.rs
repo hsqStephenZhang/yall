@@ -152,7 +152,7 @@ impl<Tk: TerminalKind> FakeTk<Tk> {
     }
 }
 
-impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
+impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
     // from a NFA to DFA
     pub fn build(grammar: &Grammar<Tk>) -> DFA<Tk> {
         // 1. build NFA
@@ -264,7 +264,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
                 final_states.insert(cur_id);
             }
 
-            let mut all_actions = HashSet::new();
+            let mut all_actions = BTreeSet::new();
 
             for nfa_state in &cur.0 {
                 let Item { rule, idx } = nfa_state.0;
@@ -621,10 +621,12 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             const END_STATE: usize = #end_state ;
         };
 
+        let mut transition_keys = self.transitions.keys().collect::<Vec<_>>();
+        transition_keys.sort();
+
         // fn __transitionN(id: &str) -> Option<usize>
-        let individual_transition_fns = self
-            .transitions
-            .iter()
+        let individual_transition_fns = transition_keys.iter()
+        .map(|id| (id, &self.transitions[id]))
             .map(|(state_id, trans_map)| {
                 let fn_name = format_ident!("__transition{}", state_id.0);
 
@@ -654,7 +656,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
             .collect::<Vec<_>>();
 
         // fn __transitions(cur: usize, id: &str) -> Option<usize>
-        let dispatch_arms = self.transitions.keys().map(|state_id| {
+        let dispatch_arms = transition_keys.iter().map(|state_id| {
             let state_id = state_id.0;
             let fn_name = format_ident!("__transition{}", state_id);
             quote! {
@@ -707,7 +709,11 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug> DFA<Tk> {
         };
 
         let eof_if = FakeTk::<Terminal>::Eof.id().to_string();
-        let lookahead_arms = self.lookahead.iter().map(
+
+        let mut lookahead_keys = self.lookahead.keys().cloned().collect::<Vec<_>>();
+        lookahead_keys.sort();
+
+        let lookahead_arms = lookahead_keys.iter().map(|id| (id, &self.lookahead[id])).map(
             |(DfaStateId(state_id), resolver)| {
                 let lookaheads = resolver.iter().filter(|(lookahead, action)| !lookahead.is_empty() && matches!(action, Action::Reduce(_))).map(|(lookahead_set, action)| {
                     let lookaheads = lookahead_set.iter().map(|tk| {
