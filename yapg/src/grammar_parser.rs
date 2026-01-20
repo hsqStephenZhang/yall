@@ -39,6 +39,9 @@ pub enum Token {
     #[token("*")]
     Star,
 
+    #[token("?")]
+    Question,
+
     #[token("|")]
     Pipe,
 
@@ -298,6 +301,10 @@ impl<'source> Parser<'source> {
                         self.advance();
                         ProductionItem::ZeroOrMore(format!("({})", group))
                     }
+                    Some(Token::Question) => {
+                        self.advance();
+                        ProductionItem::Optional(format!("({})", group))
+                    }
                     _ => ProductionItem::Symbol(format!("({})", group)),
                 };
                 production.push(prod_item);
@@ -326,6 +333,10 @@ impl<'source> Parser<'source> {
                         Some(Token::Star) => {
                             self.advance();
                             ProductionItem::ZeroOrMore(item)
+                        }
+                        Some(Token::Question) => {
+                            self.advance();
+                            ProductionItem::Optional(item)
                         }
                         _ => ProductionItem::Symbol(item),
                     };

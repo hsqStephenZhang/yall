@@ -2,10 +2,7 @@
 resolver = "3"
 members = [
     "yapg",
-    "doc/calculator",
-    "doc/calculator2",
-    "doc/lambda",
-    "doc/json",
+    "doc/*",
     "yapg-test",
 ]
 

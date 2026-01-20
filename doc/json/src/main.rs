@@ -13,8 +13,7 @@ fn main() {
 
     let parser = parser::ValueParser::new(());
     let input = "{ \"k1\" : \"v1\" , \"k2\" : [ true , false , null ] }";
-    let tokens: Vec<lexer::Token> =
-        input.split_whitespace().map(|s| lexer::Token::from(s)).collect();
+    let tokens: Vec<lexer::Token> = input.split_whitespace().map(lexer::Token::from).collect();
     let res = parser.parse(tokens.into_iter().peekable());
     println!("Parse result: {:?}", res);
 }

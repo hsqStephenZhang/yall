@@ -2,14 +2,72 @@ extern {
     use crate::ast::*;
 };
 
-// unique kind for each token
 tokenkind Token {
-    Plus = "+",  // corresponds to Token::Plus
-    Star = "*",
+    Lambda = "λ",
+    Backslash = "\\",
+    Colon = ":",
+    Dot = ".",
     LParen = "(",
     RParen = ")",
-    Identifier(..) = "identifier",
+    Id(..) = "id",
 };
 
-// define SemanticAction
-SemanticAction = SemanticAction;
+// Main expression production
+Expression: Expression = {
+    Abstraction => arg1,
+    Application => arg1,
+};
+
+// Lambda abstraction
+Abstraction: Expression = {
+    LambdaSymbol VariableList DotExpression => {
+        let (lambda_count, vars, body) = (arg1, arg2, arg3);
+        Expression::build_abs(lambda_count, vars, body)
+    },
+};
+
+LambdaSymbol: usize = {
+    Token::Lambda => 1,
+    Token::Backslash => 1,
+    LambdaSymbol Token::Lambda => arg1 + 1,
+    LambdaSymbol Token::Backslash => arg1 + 1,
+};
+
+VariableList: Vec<Variable> = {
+    => vec![],
+    VariableList Variable => {
+        let mut vars = arg1;
+        vars.push(arg2);
+        vars
+    },
+};
+
+DotExpression: Option<Expression> = {
+    => None,
+    Token::Dot (Expression)? => arg2
+};
+
+// Variable production
+Variable: Variable = {
+    Id => Variable(arg1, None),
+    Id Token::Colon Id => Variable(arg1, Some(arg3)),
+};
+
+// Application (left associative)
+Application: Expression = {
+    Terminal => arg1,
+    Application Terminal => {
+        Expression::App(Box::new(arg1), Box::new(arg2))
+    },
+};
+
+// Terminal expressions
+Terminal: Expression = {
+    Variable => Expression::Var(arg1),
+    Token::LParen Expression Token::RParen => arg2,
+};
+
+// Identifier
+Id: String = {
+    Token::Id => arg1.into_id(),
+};

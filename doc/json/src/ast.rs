@@ -26,7 +26,7 @@ pub struct JsonObject {
     pub members: Vec<(String, JsonValue)>,
 }
 
-impl JsonObject{
+impl JsonObject {
     pub fn new() -> Self {
         JsonObject { members: vec![] }
     }
@@ -35,4 +35,3 @@ impl JsonObject{
         self.members.push((key, value));
     }
 }
-
