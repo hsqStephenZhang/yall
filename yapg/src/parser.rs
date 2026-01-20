@@ -91,9 +91,7 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             // in final state, need to reduce
             let rule_to_apply = match ctx.reduce_rule[*current_state_id] {
                 Some(rule_idx) => Some(rule_idx),
-                None => {
-                    (ctx.lookahead)(*current_state_id, token_stream.peek().map(|tk| tk.id()))
-                }
+                None => (ctx.lookahead)(*current_state_id, token_stream.peek().map(|tk| tk.id())),
             };
 
             let rule_to_apply = match rule_to_apply {

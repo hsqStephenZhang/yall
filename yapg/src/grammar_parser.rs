@@ -39,7 +39,7 @@ pub enum Token {
     #[token("*")]
     Star,
 
-    #[token("|")] 
+    #[token("|")]
     Pipe,
 
     #[token("tokenkind")]
@@ -47,7 +47,7 @@ pub enum Token {
 
     #[regex(r#""(?:[^"\\]|\\.)*""#, |lex| {
         let s = lex.slice();
-        s[1..s.len()-1].to_string() 
+        s[1..s.len()-1].to_string()
     })]
     StringLiteral(String),
 
@@ -68,11 +68,11 @@ pub enum Token {
 }
 
 impl Token {
-    fn as_extern_block(self) -> Option<String> {
+    fn into_extern_block(self) -> Option<String> {
         if let Token::ExternBlock(code) = self { Some(code.clone()) } else { None }
     }
 
-    fn as_semantic_action(self) -> Option<String> {
+    fn into_semantic_action(self) -> Option<String> {
         if let Token::SemanticAction(action) = self { Some(action.clone()) } else { None }
     }
 }
@@ -87,10 +87,13 @@ fn extract_balanced(lex: &mut Lexer<Token>, delimiters: &[char]) -> String {
     let mut count_angle = 0; // <>
 
     for c in remainder.chars() {
-        if count_paren == 0 && count_brack == 0 && count_brace == 0 && count_angle == 0 {
-            if delimiters.contains(&c) {
-                break;
-            }
+        if count_paren == 0
+            && count_brack == 0
+            && count_brace == 0
+            && count_angle == 0
+            && delimiters.contains(&c)
+        {
+            break;
         }
 
         match c {
@@ -199,12 +202,12 @@ impl<'source> Parser<'source> {
                     rule_groups.push(self.parse_non_terminal());
                 }
                 Token::ExternBlock(_) => {
-                    extern_code = self.advance().unwrap().as_extern_block();
+                    extern_code = self.advance().unwrap().into_extern_block();
                     self.expect(Token::RBrace);
                     self.expect(Token::Semi);
                 }
                 Token::SemanticAction(_) => {
-                    semantic_action_type = self.advance().unwrap().as_semantic_action();
+                    semantic_action_type = self.advance().unwrap().into_semantic_action();
                     self.expect(Token::Semi);
                 }
                 Token::KwTokenKind => {
@@ -242,11 +245,11 @@ impl<'source> Parser<'source> {
             if *token == Token::RBrace {
                 break;
             }
-            
+
             // Parse a rule or set of alternatives
             let first_rule = self.parse_rule();
             rules.push(first_rule);
-            
+
             // Check for | alternatives
             while let Some(Token::Pipe) = self.peek() {
                 self.advance(); // consume |
@@ -284,7 +287,7 @@ impl<'source> Parser<'source> {
             if let Some(Token::LParen) = self.peek() {
                 self.advance(); // consume (
                 let group = self.parse_group();
-                
+
                 // Check for suffix operators on the group
                 let prod_item = match self.peek() {
                     Some(Token::Plus) => {
@@ -313,7 +316,7 @@ impl<'source> Parser<'source> {
                             panic!("Expected Identifier after ::");
                         }
                     }
-                    
+
                     // Check for suffix operators: +, *, ?
                     let prod_item = match self.peek() {
                         Some(Token::Plus) => {
@@ -423,7 +426,7 @@ impl<'source> Parser<'source> {
             };
 
             defs.push(TokenKindDef { name, kind, is_unit });
-            
+
             self.expect(Token::Comma);
         }
 
@@ -435,7 +438,7 @@ impl<'source> Parser<'source> {
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
 
     use super::*;
 
@@ -524,7 +527,7 @@ fn test() {
                 let unit_display = if token_kind.is_unit { "" } else { "(..)" };
                 println!("TokenKind: {}{} = {:?}", token_kind.name, unit_display, token_kind.kind);
             }
-            
+
             for def in grammar.rule_groups {
                 println!("NonTerminal: {}", def.name);
                 println!("  Type: {}", def.return_type);

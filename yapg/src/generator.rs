@@ -127,19 +127,19 @@ impl GenGrammar {
     fn expand_operators(&mut self) {
         let mut new_rule_groups = Vec::new();
         let mut counter = 0;
-        
+
         // Build a type map before we start mutating
         let mut type_map: HashMap<String, String> = HashMap::new();
         for group in &self.rule_groups {
             type_map.insert(group.name.clone(), group.return_type.clone());
         }
-        
+
         let token_ty = self.token_ty.clone();
-        
+
         for group in &mut self.rule_groups {
             for rule in &mut group.rules {
                 let mut new_production = Vec::new();
-                
+
                 for item in &rule.production {
                     match item {
                         ProductionItem::Symbol(s) => {
@@ -147,28 +147,30 @@ impl GenGrammar {
                         }
                         ProductionItem::OneOrMore(s) => {
                             // First, expand parenthesized groups
-                            let (expanded_symbol, elem_type, group_aux_rules) = 
+                            let (expanded_symbol, elem_type, group_aux_rules) =
                                 Self::expand_group(&token_ty, s, &mut counter, &type_map);
                             new_rule_groups.extend(group_aux_rules);
-                            
+
                             // Update type_map with the new symbol
                             if let Some(ref et) = elem_type {
                                 type_map.insert(expanded_symbol.clone(), et.clone());
                             }
-                            
+
                             // Then create auxiliary non-terminal for A+
                             let sanitized = Self::sanitize_name(&expanded_symbol);
                             let aux_name = format!("{}_plus_{}", sanitized, counter);
                             counter += 1;
-                            
-                            let element_type = elem_type.unwrap_or_else(|| 
+
+                            let element_type = elem_type.unwrap_or_else(|| {
                                 Self::get_type_from_map(&token_ty, &expanded_symbol, &type_map)
-                            );
-                            
+                            });
+
                             // A_plus -> A | A_plus A
                             let aux_rules = vec![
                                 GenRule {
-                                    production: vec![ProductionItem::Symbol(expanded_symbol.clone())],
+                                    production: vec![ProductionItem::Symbol(
+                                        expanded_symbol.clone(),
+                                    )],
                                     action: ActionKind::Code("vec![arg1]".to_string()),
                                 },
                                 GenRule {
@@ -176,42 +178,44 @@ impl GenGrammar {
                                         ProductionItem::Symbol(aux_name.clone()),
                                         ProductionItem::Symbol(expanded_symbol.clone()),
                                     ],
-                                    action: ActionKind::Code("{ let mut v = arg1; v.push(arg2); v }".to_string()),
+                                    action: ActionKind::Code(
+                                        "{ let mut v = arg1; v.push(arg2); v }".to_string(),
+                                    ),
                                 },
                             ];
-                            
+
                             let aux_type = format!("Vec<{}>", element_type);
                             type_map.insert(aux_name.clone(), aux_type.clone());
-                            
+
                             new_rule_groups.push(GenRuleGroup {
                                 name: aux_name.clone(),
                                 return_type: aux_type,
                                 rules: aux_rules,
                                 alternatives: Vec::new(),
                             });
-                            
+
                             new_production.push(ProductionItem::Symbol(aux_name));
                         }
                         ProductionItem::ZeroOrMore(s) => {
                             // First, expand parenthesized groups
-                            let (expanded_symbol, elem_type, group_aux_rules) = 
+                            let (expanded_symbol, elem_type, group_aux_rules) =
                                 Self::expand_group(&token_ty, s, &mut counter, &type_map);
                             new_rule_groups.extend(group_aux_rules);
-                            
+
                             // Update type_map with the new symbol
                             if let Some(ref et) = elem_type {
                                 type_map.insert(expanded_symbol.clone(), et.clone());
                             }
-                            
+
                             // Then create auxiliary non-terminal for A*
                             let sanitized = Self::sanitize_name(&expanded_symbol);
                             let aux_name = format!("{}_star_{}", sanitized, counter);
                             counter += 1;
-                            
-                            let element_type = elem_type.unwrap_or_else(|| 
+
+                            let element_type = elem_type.unwrap_or_else(|| {
                                 Self::get_type_from_map(&token_ty, &expanded_symbol, &type_map)
-                            );
-                            
+                            });
+
                             // A_star -> ε | A_star A
                             let aux_rules = vec![
                                 GenRule {
@@ -223,42 +227,44 @@ impl GenGrammar {
                                         ProductionItem::Symbol(aux_name.clone()),
                                         ProductionItem::Symbol(expanded_symbol.clone()),
                                     ],
-                                    action: ActionKind::Code("{ let mut v = arg1; v.push(arg2); v }".to_string()),
+                                    action: ActionKind::Code(
+                                        "{ let mut v = arg1; v.push(arg2); v }".to_string(),
+                                    ),
                                 },
                             ];
-                            
+
                             let aux_type = format!("Vec<{}>", element_type);
                             type_map.insert(aux_name.clone(), aux_type.clone());
-                            
+
                             new_rule_groups.push(GenRuleGroup {
                                 name: aux_name.clone(),
                                 return_type: aux_type,
                                 rules: aux_rules,
                                 alternatives: Vec::new(),
                             });
-                            
+
                             new_production.push(ProductionItem::Symbol(aux_name));
                         }
                         ProductionItem::Optional(s) => {
                             // First, expand parenthesized groups
-                            let (expanded_symbol, elem_type, group_aux_rules) = 
+                            let (expanded_symbol, elem_type, group_aux_rules) =
                                 Self::expand_group(&token_ty, s, &mut counter, &type_map);
                             new_rule_groups.extend(group_aux_rules);
-                            
+
                             // Update type_map with the new symbol
                             if let Some(ref et) = elem_type {
                                 type_map.insert(expanded_symbol.clone(), et.clone());
                             }
-                            
+
                             // Then create auxiliary non-terminal for A?
                             let sanitized = Self::sanitize_name(&expanded_symbol);
                             let aux_name = format!("{}_opt_{}", sanitized, counter);
                             counter += 1;
-                            
-                            let element_type = elem_type.unwrap_or_else(|| 
+
+                            let element_type = elem_type.unwrap_or_else(|| {
                                 Self::get_type_from_map(&token_ty, &expanded_symbol, &type_map)
-                            );
-                            
+                            });
+
                             // A_opt -> ε | A
                             let aux_rules = vec![
                                 GenRule {
@@ -266,30 +272,32 @@ impl GenGrammar {
                                     action: ActionKind::Code("None".to_string()),
                                 },
                                 GenRule {
-                                    production: vec![ProductionItem::Symbol(expanded_symbol.clone())],
+                                    production: vec![ProductionItem::Symbol(
+                                        expanded_symbol.clone(),
+                                    )],
                                     action: ActionKind::Code("Some(arg1)".to_string()),
                                 },
                             ];
-                            
+
                             let aux_type = format!("Option<{}>", element_type);
                             type_map.insert(aux_name.clone(), aux_type.clone());
-                            
+
                             new_rule_groups.push(GenRuleGroup {
                                 name: aux_name.clone(),
                                 return_type: aux_type,
                                 rules: aux_rules,
                                 alternatives: Vec::new(),
                             });
-                            
+
                             new_production.push(ProductionItem::Symbol(aux_name));
                         }
                     }
                 }
-                
+
                 rule.production = new_production;
             }
         }
-        
+
         self.rule_groups.extend(new_rule_groups);
     }
 
@@ -356,13 +364,7 @@ impl GenGrammar {
         symbol: &str,
         type_map: &HashMap<String, String>,
     ) -> String {
-        if let Some(ty) = type_map.get(symbol) {
-            ty.clone()
-        } else if symbol.starts_with(token_ty) {
-            token_ty.to_string()
-        } else {
-            token_ty.to_string()
-        }
+        if let Some(ty) = type_map.get(symbol) { ty.clone() } else { token_ty.to_string() }
     }
 
     // verify the integrity of the grammar
@@ -482,8 +484,9 @@ impl Generator {
     }
 
     pub fn generate(self) -> TokenStream {
-        let extern_code = self.grammar.extern_code.as_ref().map(String::as_str).unwrap_or("");
-        let extern_code: syn::File = syn::parse_str(extern_code).expect("Invalid extern code");
+        let extern_code = self.grammar.extern_code.as_deref().unwrap_or("");
+        let extern_code: syn::File =
+            syn::parse_str(extern_code).unwrap_or_else(|_| panic!("Invalid extern code"));
         let token_terminal_kind_impl = self.gen_terminal_kind_impl();
         let value_enum = self.gen_value_enum();
         let action_fns = self.gen_action_fns();
@@ -496,7 +499,6 @@ impl Generator {
 
         quote! {
             #[allow(warnings)]
-            #[allow(unused)]
             #extern_code
             #token_terminal_kind_impl
             #value_enum
@@ -616,10 +618,11 @@ impl Generator {
 
                 match &rule.action {
                     ActionKind::Code(code) => {
-                        let user_action: TokenStream =
-                            syn::parse_str(&code).expect("Invalid action code");
+                        let user_action: TokenStream = syn::parse_str(code)
+                            .unwrap_or_else(|_| panic!("Invalid action code: {}", code));
                         funcs.push(quote! {
                             #[allow(unused)]
+                            #[allow(clippy::useless_conversion)]
                             fn #fn_name(action: &mut #semantic_action_ty, stack: &mut Vec<Value>) -> Value {
                                 #(#pops)*
                                 let result = { #user_action };
@@ -641,6 +644,7 @@ impl Generator {
 
                         funcs.push(quote! {
                             #[allow(unused)]
+                            #[allow(clippy::useless_conversion)]
                             fn #fn_name(action: &mut #semantic_action_ty, stack: &mut Vec<Value>) -> Value {
                                 #(#pops)*
                                 let args = #args;
@@ -663,8 +667,8 @@ impl Generator {
             None => "()",
             Some(ty) => ty.as_str(),
         };
-        let sema_ty: syn::Type =
-            syn::parse_str(sema_ty).expect(&format!("Invalid SemanticAction type {}", sema_ty));
+        let sema_ty: syn::Type = syn::parse_str(sema_ty)
+            .unwrap_or_else(|_| panic!("Invalid SemanticAction type {}", sema_ty));
 
         let defs = &self.grammar.rule_groups;
         let mut rows = Vec::new();
@@ -701,13 +705,13 @@ impl Generator {
         let extract_method_name = format_ident!("into_{}", start_sym.to_lowercase());
         let parser_name = format_ident!("{}Parser", start_sym.to_upper_camel_case());
         let ty_name = syn::parse_str::<syn::Type>(start_sym_ty)
-            .expect(&format!("Invalid type for start symbol: {}", start_sym_ty));
+            .unwrap_or_else(|_| panic!("Invalid type for start symbol: {}", start_sym_ty));
         let sema_ty = match self.grammar.semantic_action_type.as_ref() {
             None => "()",
             Some(ty) => ty.as_str(),
         };
-        let sema_ty: syn::Type =
-            syn::parse_str(sema_ty).expect(&format!("Invalid SemanticAction type {}", sema_ty));
+        let sema_ty: syn::Type = syn::parse_str(sema_ty)
+            .unwrap_or_else(|_| panic!("Invalid SemanticAction type {}", sema_ty));
 
         let parser = quote! {
             pub(crate) struct #parser_name<Actioner> {
@@ -789,13 +793,14 @@ impl Generator {
     }
 }
 
+#[derive(Default)]
 pub struct Configuration {
     grammar_files: Vec<String>,
 }
 
 impl Configuration {
     pub fn new() -> Self {
-        Self { grammar_files: Vec::new() }
+        Self::default()
     }
 
     pub fn add_grammar_file(mut self, path: impl Into<String>) -> Self {
@@ -822,7 +827,7 @@ impl Configuration {
                 .unwrap();
             let path = out_path.join(format!("{}.rs", filename));
 
-            let _ = std::fs::write(&path, generated_code.to_string())?;
+            std::fs::write(&path, generated_code.to_string())?;
 
             let status = std::process::Command::new("rustfmt")
                 .arg(&path)

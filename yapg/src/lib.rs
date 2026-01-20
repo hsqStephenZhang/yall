@@ -2,7 +2,6 @@ pub mod grammar;
 pub mod grammar_parser;
 pub mod nfa_dfa;
 pub mod parser;
-pub mod pda;
 
 pub mod generator;
 

@@ -140,7 +140,7 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum FakeTk<Tk> {
     Tk(Tk),
-    Eof,    
+    Eof,
 }
 
 impl<Tk: TerminalKind> FakeTk<Tk> {
@@ -393,7 +393,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
 
                 if is_err || shift_rules.len() + reduce_rules.len() <= 1 {
                     return None;
-                } 
+                }
 
                 let shift_syms = shift_rules
                     .iter()
@@ -420,7 +420,6 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
                 }
 
                 // conflict detection is done, now build the resolver
-                
                 let mut resolver: HashMap<BTreeSet<String>, Action> = HashMap::new();
 
                 for shift_rule_idx in shift_rules {
@@ -518,10 +517,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
         grammar: &Grammar<Tk>,
     ) -> HashMap<(DfaStateId, Item), HashSet<FakeTk<Tk>>> {
         let mut set: HashMap<(DfaStateId, Item), HashSet<FakeTk<Tk>>> = HashMap::new();
-        set.insert(
-            (DfaStateId(0), Item::new(0, 0)),
-            HashSet::from_iter(vec![FakeTk::Eof]),
-        );
+        set.insert((DfaStateId(0), Item::new(0, 0)), HashSet::from_iter(vec![FakeTk::Eof]));
 
         let could_be_empty_nonterms = grammar.emptyables();
         let could_be_empty = |syms: &[Symbol<Tk>]| -> bool {
@@ -545,7 +541,11 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
                         // rule 1, propagate inside the cur_state(closure)
                         if matches!(symbol, Symbol::NonTerm(_)) {
                             let rest = &grammar_rule.right[idx + 1..];
-                            let mut first_set = grammar.first_set_of_symbols(rest).into_iter().map(|tk| FakeTk::Tk(tk)).collect::<HashSet<_>>();
+                            let mut first_set = grammar
+                                .first_set_of_symbols(rest)
+                                .into_iter()
+                                .map(|tk| FakeTk::Tk(tk))
+                                .collect::<HashSet<_>>();
                             // inside the state, the lookahead can only be propagated if the rest could be empty
                             if could_be_empty(rest) {
                                 first_set.extend(
@@ -611,6 +611,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
             self.final_states.iter().map(|DfaStateId(id)| quote! { #id }).collect::<Vec<_>>();
 
         let start_end_tks = quote! {
+            #[allow(clippy::match_like_matches_macro)]
             fn __is_final_state(state_id: usize) -> bool {
                 match state_id {
                     #(#final_states)|* => true,
@@ -625,8 +626,9 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
         transition_keys.sort();
 
         // fn __transitionN(id: &str) -> Option<usize>
-        let individual_transition_fns = transition_keys.iter()
-        .map(|id| (id, &self.transitions[id]))
+        let individual_transition_fns = transition_keys
+            .iter()
+            .map(|id| (id, &self.transitions[id]))
             .map(|(state_id, trans_map)| {
                 let fn_name = format_ident!("__transition{}", state_id.0);
 
@@ -675,8 +677,9 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
 
         let reduce_table = (0..state_num)
             .map(|state_id| {
-                if !self.lookahead.contains_key(&DfaStateId(state_id)) && let Some(reduce_rule) =
-                    self.id_to_state[&DfaStateId(state_id)].reduce_rule(grammar)
+                if !self.lookahead.contains_key(&DfaStateId(state_id))
+                    && let Some(reduce_rule) =
+                        self.id_to_state[&DfaStateId(state_id)].reduce_rule(grammar)
                 {
                     quote! { Some(#reduce_rule) }
                 } else {
@@ -715,22 +718,26 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
 
         let lookahead_arms = lookahead_keys.iter().map(|id| (id, &self.lookahead[id])).map(
             |(DfaStateId(state_id), resolver)| {
-                let lookaheads = resolver.iter().filter(|(lookahead, action)| !lookahead.is_empty() && matches!(action, Action::Reduce(_))).map(|(lookahead_set, action)| {
-                    let lookaheads = lookahead_set.iter().map(|tk| {
-                        if tk == &eof_if {
-                            quote! { None }
-                        } else {
-                            quote! { Some(#tk ) }
+                let lookaheads = resolver
+                    .iter()
+                    .filter(|(lookahead, action)| {
+                        !lookahead.is_empty() && matches!(action, Action::Reduce(_))
+                    })
+                    .map(|(lookahead_set, action)| {
+                        let lookaheads = lookahead_set.iter().map(|tk| {
+                            if tk == &eof_if {
+                                quote! { None }
+                            } else {
+                                quote! { Some(#tk ) }
+                            }
+                        });
+                        match action {
+                            Action::Shift(_) => unreachable!(),
+                            Action::Reduce(idx) => quote! {
+                                #(#lookaheads)|* => Some(#idx),
+                            },
                         }
                     });
-                    match action {
-                        Action::Shift(_) => unreachable!(),
-                        Action::Reduce(idx) => quote! {
-                            #(#lookaheads)|* => Some(#idx),
-                        },
-                    }
-
-                });
                 quote! {
                     #state_id => match token {
                         #(#lookaheads)*
