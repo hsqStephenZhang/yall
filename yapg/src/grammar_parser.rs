@@ -1,6 +1,6 @@
 use logos::{Lexer, Logos};
 
-use crate::generator::{GenGrammar, GenRule, GenRuleGroup, TokenKindDef};
+use crate::generator::{GenGrammar, GenRule, GenRuleGroup, ProductionItem, TokenKindDef};
 
 #[derive(Logos, Debug, PartialEq, Clone)]
 #[logos(skip r"[ \t\n\f]+")]
@@ -280,6 +280,27 @@ impl<'source> Parser<'source> {
                 break;
             }
 
+            // Handle parenthesized groups
+            if let Some(Token::LParen) = self.peek() {
+                self.advance(); // consume (
+                let group = self.parse_group();
+                
+                // Check for suffix operators on the group
+                let prod_item = match self.peek() {
+                    Some(Token::Plus) => {
+                        self.advance();
+                        ProductionItem::OneOrMore(format!("({})", group))
+                    }
+                    Some(Token::Star) => {
+                        self.advance();
+                        ProductionItem::ZeroOrMore(format!("({})", group))
+                    }
+                    _ => ProductionItem::Symbol(format!("({})", group)),
+                };
+                production.push(prod_item);
+                continue;
+            }
+
             match self.advance() {
                 Some(Token::Ident(s)) => {
                     let mut item = s;
@@ -297,24 +318,18 @@ impl<'source> Parser<'source> {
                     let prod_item = match self.peek() {
                         Some(Token::Plus) => {
                             self.advance();
-                            crate::generator::ProductionItem::OneOrMore(item)
+                            ProductionItem::OneOrMore(item)
                         }
                         Some(Token::Star) => {
                             self.advance();
-                            crate::generator::ProductionItem::ZeroOrMore(item)
+                            ProductionItem::ZeroOrMore(item)
                         }
-                        _ => crate::generator::ProductionItem::Symbol(item),
+                        _ => ProductionItem::Symbol(item),
                     };
                     production.push(prod_item);
                 }
                 t => panic!("Unexpected token in production: {:?}", t),
             }
-        }
-
-        // Handle | alternatives - if we see a pipe, this is an alternative
-        if let Some(Token::Pipe) = self.peek() {
-            // For now, we'll let the rule_group parser handle this
-            // Just ensure we have production items
         }
 
         let action = match self.advance() {
@@ -328,6 +343,38 @@ impl<'source> Parser<'source> {
         } else {
             GenRule { production, action: crate::generator::ActionKind::Code(action) }
         }
+    }
+
+    /// Parse a parenthesized group: (Token::Comma Item)
+    /// Returns a string representation of the group
+    fn parse_group(&mut self) -> String {
+        let mut items = Vec::new();
+
+        loop {
+            if let Some(Token::RParen) = self.peek() {
+                self.advance(); // consume )
+                break;
+            }
+
+            match self.advance() {
+                Some(Token::Ident(s)) => {
+                    let mut item = s;
+                    if let Some(Token::ColonColon) = self.peek() {
+                        self.advance(); // ::
+                        item.push_str("::");
+                        if let Some(Token::Ident(part2)) = self.advance() {
+                            item.push_str(&part2);
+                        } else {
+                            panic!("Expected Identifier after ::");
+                        }
+                    }
+                    items.push(item);
+                }
+                t => panic!("Unexpected token in group: {:?}", t),
+            }
+        }
+
+        items.join(" ")
     }
 
     /// parse section defining token kinds

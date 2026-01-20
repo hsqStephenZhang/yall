@@ -15,12 +15,7 @@ SemanticAction = SemanticAction;
 
 List: List = {
     Token::LBracket Token::RBracket => `make_empty_list`,
-    Token::LBracket Items Token::RBracket => `make_list`,
-};
-
-Items: Vec<Item> = {
-    Item => `make_single_item`,
-    Items Token::Comma Item => `append_item`,
+    Token::LBracket Item (Token::Comma Item)* Token::RBracket => `append_item`
 };
 
 Item: Item = {

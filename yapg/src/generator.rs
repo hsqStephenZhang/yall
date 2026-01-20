@@ -49,9 +49,9 @@ impl std::fmt::Display for ActionKind {
 pub enum ProductionItem {
     Symbol(String),
     // Item with a suffix operator: +, *, or ?
-    ZeroOrMore(String),    // item*
-    OneOrMore(String),     // item+
-    Optional(String),      // item?
+    ZeroOrMore(String), // item*
+    OneOrMore(String),  // item+
+    Optional(String),   // item?
 }
 
 impl ProductionItem {
@@ -110,13 +110,20 @@ impl GenGrammar {
         grammar
     }
 
+    /// Sanitize a symbol name to be a valid Rust identifier
+    fn sanitize_name(s: &str) -> String {
+        s.replace("::", "_")
+            .replace("(", "")
+            .replace(")", "")
+            .replace(" ", "Empty")
+            .replace(",", "Comma")
+            .replace("[", "LBracket")
+            .replace("]", "RBracket")
+            .replace("+", "Plus")
+            .replace("*", "Star")
+    }
+
     /// Expand operators (+, *, ?) into auxiliary grammar rules
-    /// For example, `A+` becomes a new non-terminal `A_plus` with rules:
-    ///   A_plus -> A
-    ///   A_plus -> A_plus A
-    /// And `A*` becomes `A_star` with rules:
-    ///   A_star -> ε
-    ///   A_star -> A_star A
     fn expand_operators(&mut self) {
         let mut new_rule_groups = Vec::new();
         let mut counter = 0;
@@ -126,6 +133,8 @@ impl GenGrammar {
         for group in &self.rule_groups {
             type_map.insert(group.name.clone(), group.return_type.clone());
         }
+        
+        let token_ty = self.token_ty.clone();
         
         for group in &mut self.rule_groups {
             for rule in &mut group.rules {
@@ -137,28 +146,41 @@ impl GenGrammar {
                             new_production.push(ProductionItem::Symbol(s.clone()));
                         }
                         ProductionItem::OneOrMore(s) => {
-                            // Create auxiliary non-terminal for A+
-                            let aux_name = format!("{}_plus_{}", s.replace("::", "_"), counter);
+                            // First, expand parenthesized groups
+                            let (expanded_symbol, elem_type, group_aux_rules) = 
+                                Self::expand_group(&token_ty, s, &mut counter, &type_map);
+                            new_rule_groups.extend(group_aux_rules);
+                            
+                            // Update type_map with the new symbol
+                            if let Some(ref et) = elem_type {
+                                type_map.insert(expanded_symbol.clone(), et.clone());
+                            }
+                            
+                            // Then create auxiliary non-terminal for A+
+                            let sanitized = Self::sanitize_name(&expanded_symbol);
+                            let aux_name = format!("{}_plus_{}", sanitized, counter);
                             counter += 1;
                             
-                            let elem_type = Self::get_type_from_map(&self.token_ty, s, &type_map);
+                            let element_type = elem_type.unwrap_or_else(|| 
+                                Self::get_type_from_map(&token_ty, &expanded_symbol, &type_map)
+                            );
                             
                             // A_plus -> A | A_plus A
                             let aux_rules = vec![
                                 GenRule {
-                                    production: vec![ProductionItem::Symbol(s.clone())],
+                                    production: vec![ProductionItem::Symbol(expanded_symbol.clone())],
                                     action: ActionKind::Code("vec![arg1]".to_string()),
                                 },
                                 GenRule {
                                     production: vec![
                                         ProductionItem::Symbol(aux_name.clone()),
-                                        ProductionItem::Symbol(s.clone()),
+                                        ProductionItem::Symbol(expanded_symbol.clone()),
                                     ],
                                     action: ActionKind::Code("{ let mut v = arg1; v.push(arg2); v }".to_string()),
                                 },
                             ];
                             
-                            let aux_type = format!("Vec<{}>", elem_type);
+                            let aux_type = format!("Vec<{}>", element_type);
                             type_map.insert(aux_name.clone(), aux_type.clone());
                             
                             new_rule_groups.push(GenRuleGroup {
@@ -171,11 +193,24 @@ impl GenGrammar {
                             new_production.push(ProductionItem::Symbol(aux_name));
                         }
                         ProductionItem::ZeroOrMore(s) => {
-                            // Create auxiliary non-terminal for A*
-                            let aux_name = format!("{}_star_{}", s.replace("::", "_"), counter);
+                            // First, expand parenthesized groups
+                            let (expanded_symbol, elem_type, group_aux_rules) = 
+                                Self::expand_group(&token_ty, s, &mut counter, &type_map);
+                            new_rule_groups.extend(group_aux_rules);
+                            
+                            // Update type_map with the new symbol
+                            if let Some(ref et) = elem_type {
+                                type_map.insert(expanded_symbol.clone(), et.clone());
+                            }
+                            
+                            // Then create auxiliary non-terminal for A*
+                            let sanitized = Self::sanitize_name(&expanded_symbol);
+                            let aux_name = format!("{}_star_{}", sanitized, counter);
                             counter += 1;
                             
-                            let elem_type = Self::get_type_from_map(&self.token_ty, s, &type_map);
+                            let element_type = elem_type.unwrap_or_else(|| 
+                                Self::get_type_from_map(&token_ty, &expanded_symbol, &type_map)
+                            );
                             
                             // A_star -> ε | A_star A
                             let aux_rules = vec![
@@ -186,13 +221,13 @@ impl GenGrammar {
                                 GenRule {
                                     production: vec![
                                         ProductionItem::Symbol(aux_name.clone()),
-                                        ProductionItem::Symbol(s.clone()),
+                                        ProductionItem::Symbol(expanded_symbol.clone()),
                                     ],
                                     action: ActionKind::Code("{ let mut v = arg1; v.push(arg2); v }".to_string()),
                                 },
                             ];
                             
-                            let aux_type = format!("Vec<{}>", elem_type);
+                            let aux_type = format!("Vec<{}>", element_type);
                             type_map.insert(aux_name.clone(), aux_type.clone());
                             
                             new_rule_groups.push(GenRuleGroup {
@@ -205,11 +240,24 @@ impl GenGrammar {
                             new_production.push(ProductionItem::Symbol(aux_name));
                         }
                         ProductionItem::Optional(s) => {
-                            // Create auxiliary non-terminal for A?
-                            let aux_name = format!("{}_opt_{}", s.replace("::", "_"), counter);
+                            // First, expand parenthesized groups
+                            let (expanded_symbol, elem_type, group_aux_rules) = 
+                                Self::expand_group(&token_ty, s, &mut counter, &type_map);
+                            new_rule_groups.extend(group_aux_rules);
+                            
+                            // Update type_map with the new symbol
+                            if let Some(ref et) = elem_type {
+                                type_map.insert(expanded_symbol.clone(), et.clone());
+                            }
+                            
+                            // Then create auxiliary non-terminal for A?
+                            let sanitized = Self::sanitize_name(&expanded_symbol);
+                            let aux_name = format!("{}_opt_{}", sanitized, counter);
                             counter += 1;
                             
-                            let elem_type = Self::get_type_from_map(&self.token_ty, s, &type_map);
+                            let element_type = elem_type.unwrap_or_else(|| 
+                                Self::get_type_from_map(&token_ty, &expanded_symbol, &type_map)
+                            );
                             
                             // A_opt -> ε | A
                             let aux_rules = vec![
@@ -218,12 +266,12 @@ impl GenGrammar {
                                     action: ActionKind::Code("None".to_string()),
                                 },
                                 GenRule {
-                                    production: vec![ProductionItem::Symbol(s.clone())],
+                                    production: vec![ProductionItem::Symbol(expanded_symbol.clone())],
                                     action: ActionKind::Code("Some(arg1)".to_string()),
                                 },
                             ];
                             
-                            let aux_type = format!("Option<{}>", elem_type);
+                            let aux_type = format!("Option<{}>", element_type);
                             type_map.insert(aux_name.clone(), aux_type.clone());
                             
                             new_rule_groups.push(GenRuleGroup {
@@ -245,14 +293,75 @@ impl GenGrammar {
         self.rule_groups.extend(new_rule_groups);
     }
 
+    /// Expand a parenthesized group like "(Token::Comma Item)" into an auxiliary non-terminal
+    /// Returns (new_symbol_name, element_type, auxiliary_rule_groups)
+    fn expand_group(
+        token_ty: &str,
+        s: &str,
+        counter: &mut usize,
+        type_map: &HashMap<String, String>,
+    ) -> (String, Option<String>, Vec<GenRuleGroup>) {
+        // Check if it's a parenthesized group
+        if !s.starts_with('(') || !s.ends_with(')') {
+            return (s.to_string(), None, vec![]);
+        }
+
+        // Extract the content inside parentheses
+        let content = &s[1..s.len() - 1];
+
+        // Split by whitespace to get individual symbols
+        let symbols: Vec<&str> = content.split_whitespace().collect();
+
+        // Create a new non-terminal for this group
+        let sanitized = Self::sanitize_name(content);
+        let group_name = format!("{}_group_{}", sanitized, *counter);
+        *counter += 1;
+
+        // Determine the return type (tuple of symbol types)
+        let symbol_types: Vec<String> =
+            symbols.iter().map(|sym| Self::get_type_from_map(token_ty, sym, type_map)).collect();
+
+        let return_type = if symbol_types.len() == 1 {
+            symbol_types[0].clone()
+        } else {
+            format!("({})", symbol_types.join(", "))
+        };
+
+        // Create the production: Group -> Symbol1 Symbol2 ...
+        let production: Vec<ProductionItem> =
+            symbols.iter().map(|s| ProductionItem::Symbol(s.to_string())).collect();
+
+        // Create action that constructs the tuple
+        let action = if symbols.len() == 1 {
+            ActionKind::Code("arg1".to_string())
+        } else {
+            let args: Vec<String> = (1..=symbols.len()).map(|i| format!("arg{}", i)).collect();
+            ActionKind::Code(format!("({})", args.join(", ")))
+        };
+
+        let group_rule = GenRule { production, action };
+
+        let group_rule_group = GenRuleGroup {
+            name: group_name.clone(),
+            return_type: return_type.clone(),
+            rules: vec![group_rule],
+            alternatives: Vec::new(),
+        };
+
+        (group_name, Some(return_type), vec![group_rule_group])
+    }
     /// Get type from the type map, or default to Token type
-    fn get_type_from_map(token_ty: &String, symbol: &str, type_map: &HashMap<String, String>) -> String {
+    fn get_type_from_map(
+        token_ty: &str,
+        symbol: &str,
+        type_map: &HashMap<String, String>,
+    ) -> String {
         if let Some(ty) = type_map.get(symbol) {
             ty.clone()
         } else if symbol.starts_with(token_ty) {
-            token_ty.clone()
+            token_ty.to_string()
         } else {
-            token_ty.clone()
+            token_ty.to_string()
         }
     }
 
@@ -436,6 +545,7 @@ impl Generator {
         gen_variant("Token".into(), "Token");
 
         quote! {
+            #[allow(non_camel_case_types)]
             #[derive(Debug)]
             enum Value {
                 #(#variants),*

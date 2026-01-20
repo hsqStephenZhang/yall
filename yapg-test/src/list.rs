@@ -48,9 +48,13 @@ mod ast {
             vec![item]
         }
 
-        pub fn append_item(&mut self, (mut items, _, item): (Vec<Item>, Token, Item)) -> Vec<Item> {
-            items.push(item);
-            items
+        pub fn append_item(
+            &mut self,
+            (_, item, mut items, _): (Token, Item, Vec<(Token, Item)>, Token),
+        ) -> List {
+            let mut res = vec![item];
+            res.extend(items.into_iter().map(|(_, it)| it));
+            List(res)
         }
 
         pub fn make_num_item(&mut self, token: Token) -> Item {
