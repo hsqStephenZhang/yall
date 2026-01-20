@@ -51,7 +51,7 @@ impl From<Token> for Identifier {
     }
 }
 
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone)]
 pub enum Token {
     LParen,
     RParen,
@@ -60,19 +60,6 @@ pub enum Token {
     Identifier(String),
 }
 
-impl PartialEq for Token {
-    fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
-    }
-}
-
-impl std::hash::Hash for Token {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.id().hash(state);
-    }
-}
-
-// for generate tokenstream from str
 impl From<&str> for Token {
     fn from(s: &str) -> Self {
         match s {
