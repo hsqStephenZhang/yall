@@ -1,0 +1,29 @@
+extern {
+    use crate::list::ast::*;
+};
+
+// unique kind for each token
+tokenkind Token {
+    Num(..) = "number",
+    Comma = ",",
+    LBracket = "[",
+    RBracket = "]",
+};
+
+// define SemanticAction
+SemanticAction = SemanticAction;
+
+List: List = {
+    Token::LBracket Token::RBracket => `make_empty_list`,
+    Token::LBracket Items Token::RBracket => `make_list`,
+};
+
+Items: Vec<Item> = {
+    Item => `make_single_item`,
+    Items Token::Comma Item => `append_item`,
+};
+
+Item: Item = {
+    Token::Num => `make_num_item`,
+    List => `make_list_item`,
+};

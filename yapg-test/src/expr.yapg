@@ -1,0 +1,38 @@
+extern {
+    use crate::expr::ast::*;
+};
+
+// unique kind for each token
+tokenkind Token {
+    Plus = "+",  // corresponds to Token::Plus
+    Star = "*",
+    LParen = "(",
+    RParen = ")",
+    Identifier(..) = "identifier",
+};
+
+// define SemanticAction
+SemanticAction = SemanticAction;
+
+Expr: Box<Expr> = {
+    Expr ExprOp Factor => `eval_bin`,
+    Factor             => arg1
+};
+
+ExprOp: Opcode = {
+    Token::Plus  => Opcode::Add,
+};
+
+Factor: Box<Expr> = {
+    Factor FactorOp Term => `eval_bin`,
+    Term                 => arg1,
+};
+
+FactorOp: Opcode = {
+    Token::Star => Opcode::Mul,       // factor_op -> *
+};
+        
+Term: Box<Expr> = {
+    Token::Identifier => `eval_var`,
+    Token::LParen Expr Token::RParen => arg2
+};

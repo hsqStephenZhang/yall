@@ -294,3 +294,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "yapg-test"
+version = "0.1.0"
+dependencies = [
+ "yapg",
+]
