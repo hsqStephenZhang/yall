@@ -20,6 +20,8 @@ pub struct GenRuleGroup {
     pub name: String,
     pub return_type: String,
     pub rules: Vec<GenRule>,
+    // For handling | alternatives within a rule
+    pub alternatives: Vec<Vec<GenRule>>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,8 +46,28 @@ impl std::fmt::Display for ActionKind {
 }
 
 #[derive(Debug, Clone)]
+pub enum ProductionItem {
+    Symbol(String),
+    // Item with a suffix operator: +, *, or ?
+    ZeroOrMore(String),    // item*
+    OneOrMore(String),     // item+
+    Optional(String),      // item?
+}
+
+impl ProductionItem {
+    pub fn symbol(&self) -> &str {
+        match self {
+            ProductionItem::Symbol(s) => s,
+            ProductionItem::ZeroOrMore(s) => s,
+            ProductionItem::OneOrMore(s) => s,
+            ProductionItem::Optional(s) => s,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GenRule {
-    pub production: Vec<String>,
+    pub production: Vec<ProductionItem>,
     pub action: ActionKind,
 }
 
@@ -76,13 +98,161 @@ impl GenGrammar {
         semantic_action_type: Option<String>,
         extern_code: Option<String>,
     ) -> Self {
-        Self {
+        let mut grammar = Self {
             rule_groups,
             token_ty,
             token_kinds,
             semantic_action_type,
             extern_code,
             non_terminals: OnceCell::new(),
+        };
+        grammar.expand_operators();
+        grammar
+    }
+
+    /// Expand operators (+, *, ?) into auxiliary grammar rules
+    /// For example, `A+` becomes a new non-terminal `A_plus` with rules:
+    ///   A_plus -> A
+    ///   A_plus -> A_plus A
+    /// And `A*` becomes `A_star` with rules:
+    ///   A_star -> ε
+    ///   A_star -> A_star A
+    fn expand_operators(&mut self) {
+        let mut new_rule_groups = Vec::new();
+        let mut counter = 0;
+        
+        // Build a type map before we start mutating
+        let mut type_map: HashMap<String, String> = HashMap::new();
+        for group in &self.rule_groups {
+            type_map.insert(group.name.clone(), group.return_type.clone());
+        }
+        
+        for group in &mut self.rule_groups {
+            for rule in &mut group.rules {
+                let mut new_production = Vec::new();
+                
+                for item in &rule.production {
+                    match item {
+                        ProductionItem::Symbol(s) => {
+                            new_production.push(ProductionItem::Symbol(s.clone()));
+                        }
+                        ProductionItem::OneOrMore(s) => {
+                            // Create auxiliary non-terminal for A+
+                            let aux_name = format!("{}_plus_{}", s.replace("::", "_"), counter);
+                            counter += 1;
+                            
+                            let elem_type = Self::get_type_from_map(&self.token_ty, s, &type_map);
+                            
+                            // A_plus -> A | A_plus A
+                            let aux_rules = vec![
+                                GenRule {
+                                    production: vec![ProductionItem::Symbol(s.clone())],
+                                    action: ActionKind::Code("vec![arg1]".to_string()),
+                                },
+                                GenRule {
+                                    production: vec![
+                                        ProductionItem::Symbol(aux_name.clone()),
+                                        ProductionItem::Symbol(s.clone()),
+                                    ],
+                                    action: ActionKind::Code("{ let mut v = arg1; v.push(arg2); v }".to_string()),
+                                },
+                            ];
+                            
+                            let aux_type = format!("Vec<{}>", elem_type);
+                            type_map.insert(aux_name.clone(), aux_type.clone());
+                            
+                            new_rule_groups.push(GenRuleGroup {
+                                name: aux_name.clone(),
+                                return_type: aux_type,
+                                rules: aux_rules,
+                                alternatives: Vec::new(),
+                            });
+                            
+                            new_production.push(ProductionItem::Symbol(aux_name));
+                        }
+                        ProductionItem::ZeroOrMore(s) => {
+                            // Create auxiliary non-terminal for A*
+                            let aux_name = format!("{}_star_{}", s.replace("::", "_"), counter);
+                            counter += 1;
+                            
+                            let elem_type = Self::get_type_from_map(&self.token_ty, s, &type_map);
+                            
+                            // A_star -> ε | A_star A
+                            let aux_rules = vec![
+                                GenRule {
+                                    production: vec![],
+                                    action: ActionKind::Code("Vec::new()".to_string()),
+                                },
+                                GenRule {
+                                    production: vec![
+                                        ProductionItem::Symbol(aux_name.clone()),
+                                        ProductionItem::Symbol(s.clone()),
+                                    ],
+                                    action: ActionKind::Code("{ let mut v = arg1; v.push(arg2); v }".to_string()),
+                                },
+                            ];
+                            
+                            let aux_type = format!("Vec<{}>", elem_type);
+                            type_map.insert(aux_name.clone(), aux_type.clone());
+                            
+                            new_rule_groups.push(GenRuleGroup {
+                                name: aux_name.clone(),
+                                return_type: aux_type,
+                                rules: aux_rules,
+                                alternatives: Vec::new(),
+                            });
+                            
+                            new_production.push(ProductionItem::Symbol(aux_name));
+                        }
+                        ProductionItem::Optional(s) => {
+                            // Create auxiliary non-terminal for A?
+                            let aux_name = format!("{}_opt_{}", s.replace("::", "_"), counter);
+                            counter += 1;
+                            
+                            let elem_type = Self::get_type_from_map(&self.token_ty, s, &type_map);
+                            
+                            // A_opt -> ε | A
+                            let aux_rules = vec![
+                                GenRule {
+                                    production: vec![],
+                                    action: ActionKind::Code("None".to_string()),
+                                },
+                                GenRule {
+                                    production: vec![ProductionItem::Symbol(s.clone())],
+                                    action: ActionKind::Code("Some(arg1)".to_string()),
+                                },
+                            ];
+                            
+                            let aux_type = format!("Option<{}>", elem_type);
+                            type_map.insert(aux_name.clone(), aux_type.clone());
+                            
+                            new_rule_groups.push(GenRuleGroup {
+                                name: aux_name.clone(),
+                                return_type: aux_type,
+                                rules: aux_rules,
+                                alternatives: Vec::new(),
+                            });
+                            
+                            new_production.push(ProductionItem::Symbol(aux_name));
+                        }
+                    }
+                }
+                
+                rule.production = new_production;
+            }
+        }
+        
+        self.rule_groups.extend(new_rule_groups);
+    }
+
+    /// Get type from the type map, or default to Token type
+    fn get_type_from_map(token_ty: &String, symbol: &str, type_map: &HashMap<String, String>) -> String {
+        if let Some(ty) = type_map.get(symbol) {
+            ty.clone()
+        } else if symbol.starts_with(token_ty) {
+            token_ty.clone()
+        } else {
+            token_ty.clone()
         }
     }
 
@@ -150,7 +320,8 @@ impl GenGrammar {
                 right: rule
                     .production
                     .iter()
-                    .map(|s| {
+                    .map(|item| {
+                        let s = item.symbol();
                         if non_terminals.contains(s) {
                             crate::grammar::Symbol::NonTerm(s.into())
                         } else {
@@ -320,8 +491,9 @@ impl Generator {
                 // Expr -> Expr(1) Op(2) Factor(3)
                 // stack: [..., arg1, arg2, arg3]
 
-                for (i, symbol) in rule.production.iter().enumerate().rev() {
+                for (i, item) in rule.production.iter().enumerate().rev() {
                     let arg_name = format_ident!("arg{}", i + 1); // arg1, arg2...
+                    let symbol = item.symbol();
 
                     let target_variant =
                         if self.symbol_type_map.contains_key(symbol) { symbol } else { "Token" };

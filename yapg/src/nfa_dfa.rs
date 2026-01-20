@@ -445,7 +445,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
 
         if !errors_collector.is_empty() {
             for err in errors_collector {
-                tracing::error!("{}", err);
+                eprintln!("{}", err);
             }
             panic!("Conflicts detected in grammar, see errors above.");
         }

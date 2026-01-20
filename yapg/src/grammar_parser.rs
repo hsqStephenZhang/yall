@@ -33,6 +33,15 @@ pub enum Token {
     #[token("::")]
     ColonColon,
 
+    #[token("+")]
+    Plus,
+
+    #[token("*")]
+    Star,
+
+    #[token("|")] 
+    Pipe,
+
     #[token("tokenkind")]
     KwTokenKind,
 
@@ -233,7 +242,17 @@ impl<'source> Parser<'source> {
             if *token == Token::RBrace {
                 break;
             }
-            rules.push(self.parse_rule());
+            
+            // Parse a rule or set of alternatives
+            let first_rule = self.parse_rule();
+            rules.push(first_rule);
+            
+            // Check for | alternatives
+            while let Some(Token::Pipe) = self.peek() {
+                self.advance(); // consume |
+                let alt_rule = self.parse_rule();
+                rules.push(alt_rule);
+            }
 
             if let Some(Token::Comma) = self.peek() {
                 self.advance();
@@ -243,7 +262,7 @@ impl<'source> Parser<'source> {
         // 6. }
         self.expect(Token::RBrace);
 
-        GenRuleGroup { name, return_type, rules }
+        GenRuleGroup { name, return_type, rules, alternatives: Vec::new() }
     }
 
     // Part1 Part2 ... => Action
@@ -254,8 +273,11 @@ impl<'source> Parser<'source> {
             if let Some(Token::ArrowWithAction(_)) = self.peek() {
                 break;
             }
-            if let Some(Token::RBrace) | Some(Token::Comma) = self.peek() {
-                panic!("Expected '=>' in rule definition");
+            if let Some(Token::RBrace) | Some(Token::Comma) | Some(Token::Pipe) = self.peek() {
+                if production.is_empty() {
+                    panic!("Expected '=>' in rule definition");
+                }
+                break;
             }
 
             match self.advance() {
@@ -270,10 +292,29 @@ impl<'source> Parser<'source> {
                             panic!("Expected Identifier after ::");
                         }
                     }
-                    production.push(item);
+                    
+                    // Check for suffix operators: +, *, ?
+                    let prod_item = match self.peek() {
+                        Some(Token::Plus) => {
+                            self.advance();
+                            crate::generator::ProductionItem::OneOrMore(item)
+                        }
+                        Some(Token::Star) => {
+                            self.advance();
+                            crate::generator::ProductionItem::ZeroOrMore(item)
+                        }
+                        _ => crate::generator::ProductionItem::Symbol(item),
+                    };
+                    production.push(prod_item);
                 }
                 t => panic!("Unexpected token in production: {:?}", t),
             }
+        }
+
+        // Handle | alternatives - if we see a pipe, this is an alternative
+        if let Some(Token::Pipe) = self.peek() {
+            // For now, we'll let the rule_group parser handle this
+            // Just ensure we have production items
         }
 
         let action = match self.advance() {
