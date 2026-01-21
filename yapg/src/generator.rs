@@ -121,6 +121,7 @@ impl GenGrammar {
             .replace("]", "RBracket")
             .replace("+", "Plus")
             .replace("*", "Star")
+            .replace("|", "Pipe")
     }
 
     /// Expand operators (+, *, ?) into auxiliary grammar rules
@@ -143,7 +144,21 @@ impl GenGrammar {
                 for item in &rule.production {
                     match item {
                         ProductionItem::Symbol(s) => {
-                            new_production.push(ProductionItem::Symbol(s.clone()));
+                            // Check if this is a parenthesized group that needs expansion
+                            if s.starts_with('(') && s.ends_with(')') {
+                                let (expanded_symbol, elem_type, group_aux_rules) =
+                                    Self::expand_group(&token_ty, s, &mut counter, &type_map);
+                                new_rule_groups.extend(group_aux_rules);
+
+                                // Update type_map with the new symbol
+                                if let Some(ref et) = elem_type {
+                                    type_map.insert(expanded_symbol.clone(), et.clone());
+                                }
+
+                                new_production.push(ProductionItem::Symbol(expanded_symbol));
+                            } else {
+                                new_production.push(ProductionItem::Symbol(s.clone()));
+                            }
                         }
                         ProductionItem::OneOrMore(s) => {
                             // First, expand parenthesized groups
@@ -301,7 +316,8 @@ impl GenGrammar {
         self.rule_groups.extend(new_rule_groups);
     }
 
-    /// Expand a parenthesized group like "(Token::Comma Item)" into an auxiliary non-terminal
+    /// Expand a parenthesized group like "(Token::Comma Item)" or "(Token::Eq | Token::NotEq)" 
+    /// into an auxiliary non-terminal
     /// Returns (new_symbol_name, element_type, auxiliary_rule_groups)
     fn expand_group(
         token_ty: &str,
@@ -317,6 +333,56 @@ impl GenGrammar {
         // Extract the content inside parentheses
         let content = &s[1..s.len() - 1];
 
+        // Check if this is an alternatives group (contains |)
+        if content.contains(" | ") {
+            // Split by | to get alternatives
+            let alternatives: Vec<&str> = content.split(" | ").collect();
+
+            // Create a new non-terminal for this group
+            let sanitized = Self::sanitize_name(content);
+            let group_name = format!("{}_group_{}", sanitized, *counter);
+            *counter += 1;
+
+            // All alternatives should have the same type (the token type)
+            let mut rules = Vec::new();
+            let mut common_type = None;
+
+            for alt in alternatives {
+                let symbols: Vec<&str> = alt.split_whitespace().collect();
+                
+                // Each alternative should be a single symbol for type consistency
+                if symbols.len() != 1 {
+                    panic!("Alternatives in groups must be single symbols, got: {}", alt);
+                }
+
+                let symbol = symbols[0];
+                let symbol_type = Self::get_type_from_map(token_ty, symbol, type_map);
+                
+                if common_type.is_none() {
+                    common_type = Some(symbol_type.clone());
+                } else if common_type.as_ref().unwrap() != &symbol_type {
+                    panic!("All alternatives in a group must have the same type, got {} and {}", 
+                           common_type.as_ref().unwrap(), symbol_type);
+                }
+
+                let production = vec![ProductionItem::Symbol(symbol.to_string())];
+                let action = ActionKind::Code("arg1".to_string());
+                rules.push(GenRule { production, action });
+            }
+
+            let return_type = common_type.unwrap_or_else(|| token_ty.to_string());
+
+            let group_rule_group = GenRuleGroup {
+                name: group_name.clone(),
+                return_type: return_type.clone(),
+                rules,
+                alternatives: Vec::new(),
+            };
+
+            return (group_name, Some(return_type), vec![group_rule_group]);
+        }
+
+        // Not an alternatives group, handle as a sequence
         // Split by whitespace to get individual symbols
         let symbols: Vec<&str> = content.split_whitespace().collect();
 

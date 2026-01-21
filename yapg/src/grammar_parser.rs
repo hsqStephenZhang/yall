@@ -291,21 +291,24 @@ impl<'source> Parser<'source> {
                 self.advance(); // consume (
                 let group = self.parse_group();
 
+                // Wrap the group content in parentheses for the ProductionItem
+                let wrapped_group = format!("({})", group);
+
                 // Check for suffix operators on the group
                 let prod_item = match self.peek() {
                     Some(Token::Plus) => {
                         self.advance();
-                        ProductionItem::OneOrMore(format!("({})", group))
+                        ProductionItem::OneOrMore(wrapped_group)
                     }
                     Some(Token::Star) => {
                         self.advance();
-                        ProductionItem::ZeroOrMore(format!("({})", group))
+                        ProductionItem::ZeroOrMore(wrapped_group)
                     }
                     Some(Token::Question) => {
                         self.advance();
-                        ProductionItem::Optional(format!("({})", group))
+                        ProductionItem::Optional(wrapped_group)
                     }
-                    _ => ProductionItem::Symbol(format!("({})", group)),
+                    _ => ProductionItem::Symbol(wrapped_group),
                 };
                 production.push(prod_item);
                 continue;
@@ -359,15 +362,28 @@ impl<'source> Parser<'source> {
         }
     }
 
-    /// Parse a parenthesized group: (Token::Comma Item)
+    /// Parse a parenthesized group: (Token::Comma Item) or (Token::Eq | Token::NotEq)
     /// Returns a string representation of the group
     fn parse_group(&mut self) -> String {
-        let mut items = Vec::new();
+        let mut alternatives = Vec::new();
+        let mut current_items = Vec::new();
 
         loop {
             if let Some(Token::RParen) = self.peek() {
                 self.advance(); // consume )
+                if !current_items.is_empty() {
+                    alternatives.push(current_items.join(" "));
+                }
                 break;
+            }
+
+            if let Some(Token::Pipe) = self.peek() {
+                self.advance(); // consume |
+                if !current_items.is_empty() {
+                    alternatives.push(current_items.join(" "));
+                    current_items = Vec::new();
+                }
+                continue;
             }
 
             match self.advance() {
@@ -382,13 +398,20 @@ impl<'source> Parser<'source> {
                             panic!("Expected Identifier after ::");
                         }
                     }
-                    items.push(item);
+                    current_items.push(item);
                 }
                 t => panic!("Unexpected token in group: {:?}", t),
             }
         }
 
-        items.join(" ")
+        // Join alternatives with | separator
+        if alternatives.len() > 1 {
+            alternatives.join(" | ")
+        } else if alternatives.len() == 1 {
+            alternatives[0].clone()
+        } else {
+            String::new()
+        }
     }
 
     /// parse section defining token kinds

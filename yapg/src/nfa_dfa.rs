@@ -131,7 +131,7 @@ pub struct Conflict {
 
 #[derive(Clone, Debug)]
 pub enum Action {
-    // shift by rule number
+    // shift to state id (not used in current implementation - shifts handled by transitions table)
     Shift(usize),
     // reduce by rule number
     Reduce(usize),
@@ -349,7 +349,7 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
 
                 let mut is_err = false;
 
-                // 1. reduce conflict that cannot be solved by lookahead
+                // 1. reduce-reduce conflict that cannot be solved by lookahead
                 if reduce_rules.len() > 1 {
                     let emtpy = HashSet::new();
                     let lookaheads = reduce_rules
@@ -372,24 +372,11 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
                         ));
                         is_err = true;
                     }
-                } else if shift_rules.len() > 1 {
-                    let shift_lookahead = shift_rules
-                        .iter()
-                        .map(|item| {
-                            let Item { rule, idx } = item;
-                            let symbol = &grammar.rules[*rule].right[*idx];
-                            symbol.id()
-                        })
-                        .collect::<HashSet<_>>();
-                    // 2. shift-shift conflict
-                    if shift_lookahead.len() != shift_rules.len() {
-                        errors_collector.push(format!(
-                            "Shift-shift conflict cannot be resolved by lookahead at state:\n{:?}",
-                            PrintableDFAState(state, grammar)
-                        ));
-                        is_err = true;
-                    }
                 }
+
+                // Note: Shift-shift conflicts don't exist in a properly constructed DFA
+                // because all shifts on the same symbol are merged into a single transition.
+                // Shifts are handled by the transitions table, not the lookahead table.
 
                 if is_err || shift_rules.len() + reduce_rules.len() <= 1 {
                     return None;
@@ -419,15 +406,9 @@ impl<Tk: Clone + TerminalKind + Hash + Eq + Debug + Ord> DFA<Tk> {
                     return None;
                 }
 
-                // conflict detection is done, now build the resolver
+                // Build the lookahead resolver - only for reduce actions
+                // (shifts are already handled by the transitions table)
                 let mut resolver: HashMap<BTreeSet<String>, Action> = HashMap::new();
-
-                for shift_rule_idx in shift_rules {
-                    let Item { rule, idx } = shift_rule_idx;
-                    let symbol = &grammar.rules[rule].right[idx];
-                    let lookahead_set = BTreeSet::from([symbol.id().into()]);
-                    resolver.insert(lookahead_set, Action::Shift(rule));
-                }
 
                 for reduce_rule_idx in reduce_rules {
                     let rule = &grammar.rules[reduce_rule_idx];
