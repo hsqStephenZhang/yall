@@ -1,0 +1,172 @@
+extern {
+    use crate::ast::*;
+    use crate::lexer::*;
+};
+
+tokenkind Token {
+    Dot = ".",
+    Tilde = "~",
+    Question = "?",
+    ColonDash = ":-",
+    Comma = ",",
+    LParen = "(",
+    RParen = ")",
+    Eq = "=",
+    NotEq = "!=",
+    True = "true",
+    False = "false",
+    Variable(..) = "variable",
+    Identifier(..) = "identifier",
+    String(..) = "string",
+    Integer(..) = "integer",
+};
+
+// Program: statement* EOF
+Program: Program = {
+    (Statement)* => {
+        Program {
+            statements: arg1
+        }
+    },
+};
+
+// Statement: assertion | retraction | query | requirement
+Statement: Statement = {
+    Clause Token::Dot => Statement::Assertion(arg1),
+    Clause Token::Tilde => Statement::Retraction(arg1),
+    Literal Token::Question => Statement::Query(arg1),
+    Token::LParen Token::Identifier Token::RParen Token::Dot => {
+        Statement::Requirement(arg2.into_identifier())
+    },
+};
+
+// Clause: literal ':-' body | literal
+Clause: Clause = {
+    Literal Token::ColonDash Body => {
+        Clause {
+            head: arg1,
+            body: Some(arg3),
+        }
+    },
+    Literal => {
+        Clause {
+            head: arg1,
+            body: None,
+        }
+    },
+};
+
+// Body: literal ',' body | literal
+Body: Vec<Literal> = {
+    Literal => vec![arg1],
+    Body Token::Comma Literal => {
+        let mut body = arg1;
+        body.push(arg3);
+        body
+    },
+};
+
+// Literal - ordered from longest to shortest to avoid conflicts
+Literal: Literal = {
+    // Longest patterns first - variable :- external_sym(terms)
+    Token::Variable Token::ColonDash Token::Identifier Token::LParen Terms Token::RParen => {
+        Literal::External(arg1.into_variable(), arg3.into_identifier(), arg5)
+    },
+    
+    // identifier/string with parentheses and terms (longer first)
+    Token::Identifier Token::LParen Terms Token::RParen => {
+        Literal::Predicate(PredicateSym::Identifier(arg1.into_identifier()), arg3)
+    },
+    Token::String Token::LParen Terms Token::RParen => {
+        Literal::Predicate(PredicateSym::String(arg1.into_string()), arg3)
+    },
+    
+    // identifier/string with empty parentheses
+    Token::Identifier Token::LParen Token::RParen => {
+        Literal::Predicate(PredicateSym::Identifier(arg1.into_identifier()), vec![])
+    },
+    Token::String Token::LParen Token::RParen => {
+        Literal::Predicate(PredicateSym::String(arg1.into_string()), vec![])
+    },
+    
+    // Variable comparisons
+    Token::Variable Token::Eq Term => {
+        Literal::Equals(Term::Variable(arg1.into_variable()), arg3)
+    },
+    Token::Variable Token::NotEq Term => {
+        Literal::NotEquals(Term::Variable(arg1.into_variable()), arg3)
+    },
+    
+    // Constant comparisons - identifier
+    Token::Identifier Token::Eq Term => {
+        Literal::Equals(Term::Constant(Constant::Identifier(arg1.into_identifier())), arg3)
+    },
+    Token::Identifier Token::NotEq Term => {
+        Literal::NotEquals(Term::Constant(Constant::Identifier(arg1.into_identifier())), arg3)
+    },
+    
+    // Constant comparisons - string
+    Token::String Token::Eq Term => {
+        Literal::Equals(Term::Constant(Constant::String(arg1.into_string())), arg3)
+    },
+    Token::String Token::NotEq Term => {
+        Literal::NotEquals(Term::Constant(Constant::String(arg1.into_string())), arg3)
+    },
+    
+    // Constant comparisons - integer
+    Token::Integer Token::Eq Term => {
+        Literal::Equals(Term::Constant(Constant::Integer(arg1.into_integer())), arg3)
+    },
+    Token::Integer Token::NotEq Term => {
+        Literal::NotEquals(Term::Constant(Constant::Integer(arg1.into_integer())), arg3)
+    },
+    
+    // Constant comparisons - true
+    Token::True Token::Eq Term => {
+        Literal::Equals(Term::Constant(Constant::True), arg3)
+    },
+    Token::True Token::NotEq Term => {
+        Literal::NotEquals(Term::Constant(Constant::True), arg3)
+    },
+    
+    // Constant comparisons - false
+    Token::False Token::Eq Term => {
+        Literal::Equals(Term::Constant(Constant::False), arg3)
+    },
+    Token::False Token::NotEq Term => {
+        Literal::NotEquals(Term::Constant(Constant::False), arg3)
+    },
+    
+    // Plain identifier/string (shortest - must be last)
+    Token::Identifier => {
+        Literal::PredicateNoArgs(PredicateSym::Identifier(arg1.into_identifier()))
+    },
+    Token::String => {
+        Literal::PredicateNoArgs(PredicateSym::String(arg1.into_string()))
+    },
+};
+
+// Terms: term_ | term_ ',' terms_
+Terms: Vec<Term> = {
+    Term => vec![arg1],
+    Terms Token::Comma Term => {
+        let mut terms = arg1;
+        terms.push(arg3);
+        terms
+    },
+};
+
+// Term: VARIABLE | constant
+Term: Term = {
+    Token::Variable => Term::Variable(arg1.into_variable()),
+    Constant => Term::Constant(arg1),
+};
+
+// Constant: IDENTIFIER | STRING | INTEGER | 'true' | 'false'
+Constant: Constant = {
+    Token::Identifier => Constant::Identifier(arg1.into_identifier()),
+    Token::String => Constant::String(arg1.into_string()),
+    Token::Integer => Constant::Integer(arg1.into_integer()),
+    Token::True => Constant::True,
+    Token::False => Constant::False,
+};
