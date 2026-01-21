@@ -46,6 +46,9 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             }
         }
 
+        // Final reduction pass with EOF as lookahead
+        self.reduces(None, &mut token_stream, ctx);
+
         token_stream.peek().is_none()
             && self.stack.len() == 2
             && self.stack[0] == ctx.start_state
@@ -67,8 +70,12 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
 
         let mut changed = false;
 
-        // first try to shift
-        // push the next state onto the stack according to the dfa transition table
+        // First try to reduce until it's unreduceable
+        // This must happen BEFORE shifting to follow LR parsing algorithm
+        changed |= self.reduces(Some(&tk), token_stream, ctx);
+
+        // After all reductions, try to shift
+        // Push the next state onto the stack according to the dfa transition table
         let current_state = self.stack.last().unwrap();
         let transition = (ctx.transitions)(*current_state, tk.id());
         if let Some(next_state) = transition {
@@ -80,7 +87,22 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             trace!("pda stack after shift: {:?}", self.stack);
         }
 
-        // then try to reduce until it's unreduceable
+        changed
+    }
+
+    // reduce till it's not reducable
+    pub fn reduces<Tk, I: Iterator<Item = Tk>>(
+        &mut self,
+        tk: Option<&Tk>,
+        token_stream: &mut std::iter::Peekable<I>,
+        ctx: &ParseContext,
+    ) -> bool
+    where
+        Tk: std::fmt::Debug + TerminalKind,
+        Value: From<Tk> + std::fmt::Debug,
+    {
+        let mut changed = false;
+
         loop {
             let current_state_id = self.stack.last().unwrap();
 
@@ -89,9 +111,10 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             }
 
             // in final state, need to reduce
+            // Use current token for lookahead (or None for EOF)
             let rule_to_apply = match ctx.reduce_rule[*current_state_id] {
                 Some(rule_idx) => Some(rule_idx),
-                None => (ctx.lookahead)(*current_state_id, token_stream.peek().map(|tk| tk.id())),
+                None => (ctx.lookahead)(*current_state_id, tk.map(|t| t.id())),
             };
 
             let rule_to_apply = match rule_to_apply {
@@ -126,7 +149,8 @@ impl<'a, Value, Actioner> PdaImpl<'a, Value, Actioner> {
             trace!("stack after reduce: {:?}", self.value_stack);
             trace!("pda stack after reduce: {:?}", self.stack);
         }
-        changed
+
+        return changed;
     }
 
     pub fn final_value(self) -> Value {
