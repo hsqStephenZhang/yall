@@ -211,6 +211,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyc"
+version = "0.1.0"
+dependencies = [
+ "logos",
+ "yapg",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"

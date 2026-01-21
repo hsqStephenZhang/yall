@@ -1,0 +1,95 @@
+extern {
+    use crate::ast::*;
+};
+
+tokenkind Token {
+    If = "if",
+    Else = "else",
+    While = "while",
+    Do = "do",
+    LParen = "(",
+    RParen = ")",
+    LBrace = "{",
+    RBrace = "}",
+    Semi = ";",
+    Eq = "=",
+    Lt = "<",
+    Plus = "+",
+    Minus = "-",
+    String(..) = "string",
+    Int(..) = "integer",
+};
+
+// program: statement+ EOF
+Program: Program = {
+    (Statement)+ => {
+        Program {
+            statements: arg1
+        }
+    },
+};
+
+// statement
+Statement: Statement = {
+    Token::If ParenExpr Statement Token::Else Statement => {
+        Statement::IfElse(arg2, Box::new(arg3), Box::new(arg5))
+    },
+    Token::While ParenExpr Statement => {
+        Statement::While(arg2, Box::new(arg3))
+    },
+    Token::Do Statement Token::While ParenExpr Token::Semi => {
+        Statement::DoWhile(Box::new(arg2), arg4)
+    },
+    Token::LBrace (Statement)* Token::RBrace => {
+        Statement::Block(arg2)
+    },
+    Expr Token::Semi => {
+        Statement::Expr(arg1)
+    },
+    Token::Semi => {
+        Statement::Empty
+    },
+};
+
+// paren_expr: '(' expr ')'
+ParenExpr: Expr = {
+    Token::LParen Expr Token::RParen => arg2,
+};
+
+// expr: test | id_ '=' expr
+Expr: Expr = {
+    Id Token::Eq Expr => {
+        Expr::Assign(arg1, Box::new(arg3))
+    },
+    Test => Expr::Test(arg1),
+};
+
+// test: sum_ | sum_ '<' sum_
+Test: Test = {
+    Sum Token::Lt Sum => Test::Lt(arg1, arg3),
+    Sum => Test::Sum(arg1),
+};
+
+// sum_: term | sum_ '+' term | sum_ '-' term
+Sum: Sum = {
+    Term => Sum::Term(arg1),
+    Sum Token::Plus Term => Sum::Add(Box::new(arg1), arg3),
+    Sum Token::Minus Term => Sum::Sub(Box::new(arg1), arg3),
+};
+
+// term: id_ | integer | paren_expr
+Term: Term = {
+    Id => Term::Id(arg1),
+    Integer => Term::Integer(arg1),
+    ParenExpr => Term::ParenExpr(Box::new(arg1)),
+};
+
+// id_: STRING
+Id: String = {
+    Token::String => arg1.into_string(),
+};
+
+// integer: INT
+Integer: i32 = {
+    Token::Int => arg1.into_int(),
+};

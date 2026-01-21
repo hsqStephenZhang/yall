@@ -1,0 +1,12 @@
+[package]
+name = "tinyc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+yapg = { path = "../../yapg" }
+
+logos.workspace = true
+
+[build-dependencies]
+yapg = { path = "../../yapg" }
